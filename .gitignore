@@ -69,3 +69,52 @@ build/*
 *.pbxuser
 *.xcworkspace
 xcuserdata
+
+# Frontend
+frontend/.next/
+frontend/node_modules/
+frontend/.env*.local
+frontend/out/
+frontend/build/
+frontend/.DS_Store
+frontend/.vercel
+frontend/*.pem
+frontend/.env
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.pnpm-debug.log*
+
+# Binaries and logs
+tunnelbroker
+*.log
+*.db
+
+# Frontend
+frontend/node_modules
+frontend/.next
+frontend/.env.local
+
+# IDE
+.vscode
+.idea
+
+# OS
+.DS_Store
+*.swp
+*.swo
+
+# Config files with sensitive data
+config.yaml
+.env
+.env.local
+
+# Dependencies
+/vendor/
+
+# Build artifacts
+/dist/
+/build/
+*.exe
+*.test
+*.out

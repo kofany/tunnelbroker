@@ -1,0 +1,38 @@
+[Unit]
+Description=TunnelBroker IPv6 Tunnel Management Service
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/bin/tunnelbroker -config /etc/tunnelbroker/config.yaml
+Restart=always
+RestartSec=5
+
+# Zmienne środowiskowe
+Environment=TB_MODE=production
+Environment=TB_FRONTEND_API_KEY=qxnycXCdMhOB04KIbtgLMcKwmfpnnfWo7ar5Kq0P2cOE62XsYSeo6Tz46ptG7
+Environment=TB_FRONTEND_ALLOWED_IPS=["0.0.0.0/0"]  # Na początek zezwalamy na wszystkie IP
+Environment=TB_FRONTEND_RATE_LIMIT=1000
+
+# Uprawnienia i bezpieczeństwo
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+# Katalogi
+WorkingDirectory=/var/lib/tunnelbroker
+RuntimeDirectory=tunnelbroker
+LogsDirectory=tunnelbroker
+ConfigurationDirectory=tunnelbroker
+
+# Logi
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target 
