@@ -149,3 +149,6 @@ Thumbs.db
 /vendor/
 go.work
 go.work.sum
+
+# Documentation with sensitive data
+docs/api.md
