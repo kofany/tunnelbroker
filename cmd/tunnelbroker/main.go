@@ -40,9 +40,12 @@ func main() {
 	api := router.Group("/api/v1")
 	api.Use(middleware.APIKeyAuth())
 	{
-		api.POST("/tunnels", tunnels.CreateTunnelHandler)
-		api.PATCH("/tunnels/:tunnel_id/ip", tunnels.UpdateClientIPHandler)
-		api.DELETE("/tunnels/:tunnel_id", tunnels.DeleteTunnelHandler)
+		// Endpointy dla tuneli
+		api.GET("/tunnels", tunnels.GetTunnelsHandler)                     // Lista wszystkich tuneli lub tuneli użytkownika
+		api.GET("/tunnels/:tunnel_id", tunnels.GetTunnelHandler)           // Szczegóły konkretnego tunelu
+		api.POST("/tunnels", tunnels.CreateTunnelHandler)                  // Tworzenie nowego tunelu
+		api.PATCH("/tunnels/:tunnel_id/ip", tunnels.UpdateClientIPHandler) // Aktualizacja IP klienta
+		api.DELETE("/tunnels/:tunnel_id", tunnels.DeleteTunnelHandler)     // Usunięcie tunelu
 	}
 
 	// Nasłuchiwanie tylko na localhost z portem z konfiguracji

@@ -1,8 +1,10 @@
 package tunnels
 
 import (
+	"fmt"
 	"net/http"
 	"os/exec"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/kofany/tunnelbroker/internal/config"
@@ -110,4 +112,137 @@ func DeleteTunnelHandler(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// GetTunnelsHandler obsługuje żądanie GET /api/v1/tunnels
+func GetTunnelsHandler(c *gin.Context) {
+	// Sprawdź, czy żądanie zawiera user_id w query params
+	userID := c.Query("user_id")
+
+	var (
+		tunnels []Tunnel
+		err     error
+	)
+
+	if userID != "" {
+		// Jeśli podano user_id, zwróć tylko tunele tego użytkownika
+		tunnels, err = GetUserTunnels(userID)
+	} else {
+		// Jeśli nie podano user_id, zwróć wszystkie tunele (tylko dla admina)
+		tunnels, err = GetAllTunnels()
+	}
+
+	if err != nil {
+		applog.Logger.Printf("Błąd pobierania tuneli: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Dla każdego tunelu wygeneruj komendy
+	type TunnelWithCommands struct {
+		Tunnel   Tunnel         `json:"tunnel"`
+		Commands TunnelCommands `json:"commands"`
+	}
+
+	var response []TunnelWithCommands
+	for _, t := range tunnels {
+		commands := &TunnelCommands{}
+		if strings.ToLower(t.Type) == "sit" {
+			commands.Server = []string{
+				fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", t.ID, t.ServerIPv4, t.ClientIPv4),
+				fmt.Sprintf("ip link set %s up", t.ID),
+				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointLocal, t.ID),
+				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix1, t.ID),
+				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix2, t.ID),
+			}
+			commands.Client = []string{
+				fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", t.ID, t.ClientIPv4, t.ServerIPv4),
+				fmt.Sprintf("ip link set %s up", t.ID),
+				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointRemote, t.ID),
+				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix1, "/64"), t.ID),
+				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix2, "/64"), t.ID),
+				fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(t.EndpointLocal, "/64"), t.ID),
+			}
+		} else if strings.ToLower(t.Type) == "gre" {
+			commands.Server = []string{
+				fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", t.ID, t.ServerIPv4, t.ClientIPv4),
+				fmt.Sprintf("ip link set %s up", t.ID),
+				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointLocal, t.ID),
+				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix1, t.ID),
+				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix2, t.ID),
+			}
+			commands.Client = []string{
+				fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", t.ID, t.ClientIPv4, t.ServerIPv4),
+				fmt.Sprintf("ip link set %s up", t.ID),
+				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointRemote, t.ID),
+				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix1, "/64"), t.ID),
+				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix2, "/64"), t.ID),
+				fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(t.EndpointLocal, "/64"), t.ID),
+			}
+		}
+
+		response = append(response, TunnelWithCommands{
+			Tunnel:   t,
+			Commands: *commands,
+		})
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// GetTunnelHandler obsługuje żądanie GET /api/v1/tunnels/:tunnel_id
+func GetTunnelHandler(c *gin.Context) {
+	tunnelID := c.Param("tunnel_id")
+
+	tunnel, err := GetTunnelByID(tunnelID)
+	if err != nil {
+		if strings.Contains(err.Error(), "nie znaleziono tunelu") {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		applog.Logger.Printf("Błąd pobierania tunelu: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Generowanie komend dla tunelu
+	commands := &TunnelCommands{}
+	if strings.ToLower(tunnel.Type) == "sit" {
+		commands.Server = []string{
+			fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", tunnel.ID, tunnel.ServerIPv4, tunnel.ClientIPv4),
+			fmt.Sprintf("ip link set %s up", tunnel.ID),
+			fmt.Sprintf("ip -6 addr add %s dev %s", tunnel.EndpointLocal, tunnel.ID),
+			fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix1, tunnel.ID),
+			fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix2, tunnel.ID),
+		}
+		commands.Client = []string{
+			fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", tunnel.ID, tunnel.ClientIPv4, tunnel.ServerIPv4),
+			fmt.Sprintf("ip link set %s up", tunnel.ID),
+			fmt.Sprintf("ip -6 addr add %s dev %s", tunnel.EndpointRemote, tunnel.ID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(tunnel.DelegatedPrefix1, "/64"), tunnel.ID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(tunnel.DelegatedPrefix2, "/64"), tunnel.ID),
+			fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(tunnel.EndpointLocal, "/64"), tunnel.ID),
+		}
+	} else if strings.ToLower(tunnel.Type) == "gre" {
+		commands.Server = []string{
+			fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", tunnel.ID, tunnel.ServerIPv4, tunnel.ClientIPv4),
+			fmt.Sprintf("ip link set %s up", tunnel.ID),
+			fmt.Sprintf("ip -6 addr add %s dev %s", tunnel.EndpointLocal, tunnel.ID),
+			fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix1, tunnel.ID),
+			fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix2, tunnel.ID),
+		}
+		commands.Client = []string{
+			fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", tunnel.ID, tunnel.ClientIPv4, tunnel.ServerIPv4),
+			fmt.Sprintf("ip link set %s up", tunnel.ID),
+			fmt.Sprintf("ip -6 addr add %s dev %s", tunnel.EndpointRemote, tunnel.ID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(tunnel.DelegatedPrefix1, "/64"), tunnel.ID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(tunnel.DelegatedPrefix2, "/64"), tunnel.ID),
+			fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(tunnel.EndpointLocal, "/64"), tunnel.ID),
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"tunnel":   tunnel,
+		"commands": commands,
+	})
 }

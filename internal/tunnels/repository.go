@@ -134,3 +134,91 @@ func ResetUserCreatedTunnels(userID string) error {
 	}
 	return nil
 }
+
+// GetAllTunnels zwraca wszystkie tunele z bazy danych
+func GetAllTunnels() ([]Tunnel, error) {
+	query := `
+		SELECT id, user_id, type, status, server_ipv4, client_ipv4, 
+		       endpoint_local, endpoint_remote, delegated_prefix_1, 
+		       delegated_prefix_2, created_at
+		FROM tunnels
+		ORDER BY created_at DESC
+	`
+	rows, err := db.Pool.Query(context.Background(), query)
+	if err != nil {
+		return nil, fmt.Errorf("błąd pobierania tuneli: %w", err)
+	}
+	defer rows.Close()
+
+	var tunnels []Tunnel
+	for rows.Next() {
+		var t Tunnel
+		err := rows.Scan(
+			&t.ID, &t.UserID, &t.Type, &t.Status, &t.ServerIPv4,
+			&t.ClientIPv4, &t.EndpointLocal, &t.EndpointRemote,
+			&t.DelegatedPrefix1, &t.DelegatedPrefix2, &t.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("błąd skanowania wiersza: %w", err)
+		}
+		tunnels = append(tunnels, t)
+	}
+	return tunnels, nil
+}
+
+// GetUserTunnels zwraca tunele dla konkretnego użytkownika
+func GetUserTunnels(userID string) ([]Tunnel, error) {
+	query := `
+		SELECT id, user_id, type, status, server_ipv4, client_ipv4, 
+		       endpoint_local, endpoint_remote, delegated_prefix_1, 
+		       delegated_prefix_2, created_at
+		FROM tunnels
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+	`
+	rows, err := db.Pool.Query(context.Background(), query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("błąd pobierania tuneli użytkownika: %w", err)
+	}
+	defer rows.Close()
+
+	var tunnels []Tunnel
+	for rows.Next() {
+		var t Tunnel
+		err := rows.Scan(
+			&t.ID, &t.UserID, &t.Type, &t.Status, &t.ServerIPv4,
+			&t.ClientIPv4, &t.EndpointLocal, &t.EndpointRemote,
+			&t.DelegatedPrefix1, &t.DelegatedPrefix2, &t.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("błąd skanowania wiersza: %w", err)
+		}
+		tunnels = append(tunnels, t)
+	}
+	return tunnels, nil
+}
+
+// GetTunnelByID zwraca tunel o podanym ID
+func GetTunnelByID(tunnelID string) (*Tunnel, error) {
+	query := `
+		SELECT id, user_id, type, status, server_ipv4, client_ipv4, 
+		       endpoint_local, endpoint_remote, delegated_prefix_1, 
+		       delegated_prefix_2, created_at
+		FROM tunnels
+		WHERE id = $1
+	`
+	var tunnel Tunnel
+	err := db.Pool.QueryRow(context.Background(), query, tunnelID).Scan(
+		&tunnel.ID, &tunnel.UserID, &tunnel.Type, &tunnel.Status,
+		&tunnel.ServerIPv4, &tunnel.ClientIPv4, &tunnel.EndpointLocal,
+		&tunnel.EndpointRemote, &tunnel.DelegatedPrefix1,
+		&tunnel.DelegatedPrefix2, &tunnel.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("nie znaleziono tunelu o ID %s", tunnelID)
+		}
+		return nil, fmt.Errorf("błąd pobierania tunelu: %w", err)
+	}
+	return &tunnel, nil
+}
