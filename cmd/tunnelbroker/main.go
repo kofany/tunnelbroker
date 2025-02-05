@@ -13,44 +13,44 @@ import (
 )
 
 func main() {
-	// Ładowanie zmiennych środowiskowych z .env
+	// Load environment variables from .env
 	if err := godotenv.Load(); err != nil {
-		log.Println("Nie znaleziono pliku .env, korzystam z ustawień środowiskowych")
+		log.Println("No .env file found, using environment settings")
 	}
 
-	// Ładowanie konfiguracji
+	// Load configuration
 	configPath := os.Getenv("CONFIG_PATH")
 	if configPath == "" {
 		configPath = "cmd/config/config.yaml"
 	}
 	if err := config.LoadConfig(configPath); err != nil {
-		log.Fatalf("Błąd ładowania konfiguracji: %v", err)
+		log.Fatalf("Error loading configuration: %v", err)
 	}
 
-	// Inicjalizacja połączenia z bazą
+	// Initialize database connection
 	if err := db.InitDB(); err != nil {
-		log.Fatalf("Błąd połączenia z bazą: %v", err)
+		log.Fatalf("Error connecting to database: %v", err)
 	}
 	defer db.CloseDB()
 
-	// Inicjalizacja routera Gin
+	// Initialize Gin router
 	router := gin.Default()
 
-	// Rejestracja endpointów API
+	// Register API endpoints
 	api := router.Group("/api/v1")
 	api.Use(middleware.APIKeyAuth())
 	{
-		// Endpointy dla tuneli
-		api.GET("/tunnels", tunnels.GetTunnelsHandler)                     // Lista wszystkich tuneli lub tuneli użytkownika
-		api.GET("/tunnels/:tunnel_id", tunnels.GetTunnelHandler)           // Szczegóły konkretnego tunelu
-		api.POST("/tunnels", tunnels.CreateTunnelHandler)                  // Tworzenie nowego tunelu
-		api.PATCH("/tunnels/:tunnel_id/ip", tunnels.UpdateClientIPHandler) // Aktualizacja IP klienta
-		api.DELETE("/tunnels/:tunnel_id", tunnels.DeleteTunnelHandler)     // Usunięcie tunelu
+		// Tunnel endpoints
+		api.GET("/tunnels", tunnels.GetTunnelsHandler)                     // List all tunnels or user tunnels
+		api.GET("/tunnels/:tunnel_id", tunnels.GetTunnelHandler)           // Get specific tunnel details
+		api.POST("/tunnels", tunnels.CreateTunnelHandler)                  // Create new tunnel
+		api.PATCH("/tunnels/:tunnel_id/ip", tunnels.UpdateClientIPHandler) // Update client IP
+		api.DELETE("/tunnels/:tunnel_id", tunnels.DeleteTunnelHandler)     // Delete tunnel
 	}
 
-	// Nasłuchiwanie tylko na localhost z portem z konfiguracji
-	log.Printf("Serwer uruchomiony na %s", config.GlobalConfig.API.Listen)
+	// Listen only on localhost with port from configuration
+	log.Printf("Server started on %s", config.GlobalConfig.API.Listen)
 	if err := router.Run(config.GlobalConfig.API.Listen); err != nil {
-		log.Fatalf("Błąd uruchomienia serwera: %v", err)
+		log.Fatalf("Error starting server: %v", err)
 	}
 }

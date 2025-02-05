@@ -16,14 +16,14 @@ func executeCommands(commands []string) error {
 	for _, cmd := range commands {
 		command := exec.Command("sh", "-c", cmd)
 		if err := command.Run(); err != nil {
-			applog.Logger.Printf("Błąd wykonania komendy %s: %v", cmd, err)
+			applog.Logger.Printf("Error executing command %s: %v", cmd, err)
 			return err
 		}
 	}
 	return nil
 }
 
-// CreateTunnelHandler obsługuje żądanie POST /api/v1/tunnels
+// CreateTunnelHandler handles POST /api/v1/tunnels request
 func CreateTunnelHandler(c *gin.Context) {
 	var req struct {
 		Type       string `json:"type" binding:"required,oneof=sit gre"`
@@ -31,30 +31,30 @@ func CreateTunnelHandler(c *gin.Context) {
 		ClientIPv4 string `json:"client_ipv4" binding:"required,ipv4"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		applog.Logger.Printf("Błąd walidacji żądania: %v", err)
+		applog.Logger.Printf("Request validation error: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Pobierz server_ipv4 z konfiguracji
+	// Get server_ipv4 from configuration
 	serverIPv4 := config.GlobalConfig.Server.IPv4
 	if serverIPv4 == "" {
-		applog.Logger.Printf("Błąd: brak konfiguracji server_ipv4")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "brak konfiguracji server_ipv4"})
+		applog.Logger.Printf("Error: missing server_ipv4 configuration")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "missing server_ipv4 configuration"})
 		return
 	}
 
 	tunnel, commands, err := CreateTunnelService(req.Type, req.UserID, req.ClientIPv4, serverIPv4)
 	if err != nil {
-		applog.Logger.Printf("Błąd tworzenia tunelu: %v", err)
+		applog.Logger.Printf("Error creating tunnel: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Wykonaj komendy po stronie serwera
+	// Execute server-side commands
 	if err := executeCommands(commands.Server); err != nil {
-		applog.Logger.Printf("Błąd wykonania komend serwera: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Błąd konfiguracji tunelu"})
+		applog.Logger.Printf("Error executing server commands: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Tunnel configuration error"})
 		return
 	}
 
@@ -64,7 +64,7 @@ func CreateTunnelHandler(c *gin.Context) {
 	})
 }
 
-// UpdateClientIPHandler obsługuje żądanie PATCH /api/v1/tunnels/:tunnel_id/ip
+// UpdateClientIPHandler handles PATCH /api/v1/tunnels/:tunnel_id/ip request
 func UpdateClientIPHandler(c *gin.Context) {
 	tunnelID := c.Param("tunnel_id")
 	var req struct {
@@ -95,18 +95,18 @@ func UpdateClientIPHandler(c *gin.Context) {
 	})
 }
 
-// DeleteTunnelHandler obsługuje żądanie DELETE /api/v1/tunnels/:tunnel_id
+// DeleteTunnelHandler handles DELETE /api/v1/tunnels/:tunnel_id request
 func DeleteTunnelHandler(c *gin.Context) {
 	tunnelID := c.Param("tunnel_id")
 
-	// Najpierw usuń interfejs z systemu
+	// First remove the interface from the system
 	command := exec.Command("ip", "tunnel", "del", tunnelID)
 	if err := command.Run(); err != nil {
-		applog.Logger.Printf("Błąd usuwania interfejsu tunelu %s: %v", tunnelID, err)
-		// Kontynuujemy nawet jeśli nie udało się usunąć interfejsu
+		applog.Logger.Printf("Error removing tunnel interface %s: %v", tunnelID, err)
+		// Continue even if interface removal fails
 	}
 
-	// Następnie usuń z bazy danych
+	// Then delete from database
 	if err := DeleteTunnel(tunnelID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -114,9 +114,9 @@ func DeleteTunnelHandler(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// GetTunnelsHandler obsługuje żądanie GET /api/v1/tunnels
+// GetTunnelsHandler handles GET /api/v1/tunnels request
 func GetTunnelsHandler(c *gin.Context) {
-	// Sprawdź, czy żądanie zawiera user_id w query params
+	// Check if request contains user_id in query params
 	userID := c.Query("user_id")
 
 	var (
@@ -125,15 +125,15 @@ func GetTunnelsHandler(c *gin.Context) {
 	)
 
 	if userID != "" {
-		// Jeśli podano user_id, zwróć tylko tunele tego użytkownika
+		// If user_id is provided, return only user's tunnels
 		tunnels, err = GetUserTunnels(userID)
 	} else {
-		// Jeśli nie podano user_id, zwróć wszystkie tunele (tylko dla admina)
+		// If no user_id is provided, return all tunnels (admin only)
 		tunnels, err = GetAllTunnels()
 	}
 
 	if err != nil {
-		applog.Logger.Printf("Błąd pobierania tuneli: %v", err)
+		applog.Logger.Printf("Error retrieving tunnels: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -190,17 +190,17 @@ func GetTunnelsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// GetTunnelHandler obsługuje żądanie GET /api/v1/tunnels/:tunnel_id
+// GetTunnelHandler handles GET /api/v1/tunnels/:tunnel_id request
 func GetTunnelHandler(c *gin.Context) {
 	tunnelID := c.Param("tunnel_id")
 
 	tunnel, err := GetTunnelByID(tunnelID)
 	if err != nil {
-		if strings.Contains(err.Error(), "nie znaleziono tunelu") {
+		if strings.Contains(err.Error(), "tunnel not found") {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		applog.Logger.Printf("Błąd pobierania tunelu: %v", err)
+		applog.Logger.Printf("Error retrieving tunnel: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

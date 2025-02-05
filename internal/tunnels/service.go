@@ -22,52 +22,52 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-// parsePrefix parsuje prefix IPv6 i zwraca obiekt net.IPNet
+// parsePrefix parses IPv6 prefix and returns net.IPNet object
 func parsePrefix(prefix string) (*net.IPNet, error) {
 	_, ipNet, err := net.ParseCIDR(prefix)
 	if err != nil {
-		return nil, fmt.Errorf("nieprawidłowy prefix IPv6: %w", err)
+		return nil, fmt.Errorf("invalid IPv6 prefix: %w", err)
 	}
 	return ipNet, nil
 }
 
-// generateDelegatedPrefix generuje delegowany prefix /64 z większego prefixu
+// generateDelegatedPrefix generates a delegated /64 prefix from a larger prefix
 func generateDelegatedPrefix(basePrefix string, randomBit int, userID string) (string, error) {
-	// Dodaj maskę /44 jeśli jej nie ma
+	// Add /44 mask if not present
 	if !strings.Contains(basePrefix, "/") {
 		basePrefix = basePrefix + "/44"
 	}
 
-	// Parsuj bazowy prefix
+	// Parse base prefix
 	ipNet, err := parsePrefix(basePrefix)
 	if err != nil {
 		return "", err
 	}
 
-	// Sprawdź czy prefix jest /44 (wymagane dla naszej logiki)
+	// Check if prefix is /44 (required for our logic)
 	ones, bits := ipNet.Mask.Size()
 	if ones != 44 {
-		return "", fmt.Errorf("prefix bazowy musi być /44, otrzymano /%d", ones)
+		return "", fmt.Errorf("base prefix must be /44, got /%d", ones)
 	}
 
-	// Konwertuj userID na liczbę
+	// Convert userID to number
 	userNum, err := strconv.ParseUint(userID, 16, 16)
 	if err != nil {
-		return "", fmt.Errorf("nieprawidłowy userID: %w", err)
+		return "", fmt.Errorf("invalid userID: %w", err)
 	}
 
-	// Oblicz nowy prefix
+	// Calculate new prefix
 	newIP := make(net.IP, len(ipNet.IP))
 	copy(newIP, ipNet.IP)
 
-	// Ustaw randomBit w trzecim tercecie (indeks 5)
+	// Set randomBit in third tercet (index 5)
 	newIP[5] = byte(randomBit)
 
-	// Ustaw userID w czwartym tercecie (indeksy 6-7)
+	// Set userID in fourth tercet (indices 6-7)
 	newIP[6] = byte(userNum >> 8)
 	newIP[7] = byte(userNum)
 
-	// Stwórz nową maskę /64
+	// Create new /64 mask
 	mask := net.CIDRMask(64, bits)
 
 	newNet := net.IPNet{
@@ -77,30 +77,30 @@ func generateDelegatedPrefix(basePrefix string, randomBit int, userID string) (s
 	return newNet.String(), nil
 }
 
-// validateIPv6Address sprawdza poprawność adresu IPv6
+// validateIPv6Address checks if IPv6 address is valid
 func validateIPv6Address(address string) error {
-	// Usuń maskę CIDR jeśli istnieje
+	// Remove CIDR mask if present
 	ipStr := strings.Split(address, "/")[0]
 
 	ip := net.ParseIP(ipStr)
 	if ip == nil || ip.To4() != nil {
-		return fmt.Errorf("nieprawidłowy adres IPv6: %s", address)
+		return fmt.Errorf("invalid IPv6 address: %s", address)
 	}
 	return nil
 }
 
-// CreateTunnelService wykonuje logikę biznesową tworzenia tunelu:
-// - Sprawdza limit tuneli dla użytkownika (max 2)
-// - Generuje ID tunelu, przydziela prefixy i endpointy
-// - Wstawia rekord do bazy i generuje komendy systemowe
+// CreateTunnelService implements business logic for tunnel creation:
+// - Checks user tunnel limit (max 2)
+// - Generates tunnel ID, assigns prefixes and endpoints
+// - Inserts record to database and generates system commands
 func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tunnel, *TunnelCommands, error) {
-	// Sprawdzenie liczby aktywnych tuneli
+	// Check number of active tunnels
 	count, err := CountActiveTunnelsByUser(userID)
 	if err != nil {
 		return nil, nil, err
 	}
 	if count >= 2 {
-		return nil, nil, errors.New("limit 2 aktywnych tuneli dla użytkownika został osiągnięty")
+		return nil, nil, errors.New("limit of 2 active tunnels per user has been reached")
 	}
 	pairNumber := 1
 	if count == 1 {
@@ -109,7 +109,7 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 
 	tunnelID := fmt.Sprintf("tun-%s-%d", userID, pairNumber)
 
-	// Pobranie prefixów z konfiguracji
+	// Get prefixes from configuration
 	var primaryPrefix, secondaryPrefix string
 	if pairNumber == 1 {
 		primaryPrefix = config.GlobalConfig.Prefixes.Para1.Primary
@@ -119,28 +119,28 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 		secondaryPrefix = config.GlobalConfig.Prefixes.Para2.Secondary
 	}
 
-	// Usunięcie maski z prefixów
+	// Remove mask from prefixes
 	primaryPrefix = strings.TrimSuffix(primaryPrefix, "/44")
 	secondaryPrefix = strings.TrimSuffix(secondaryPrefix, "/44")
 
-	// Generowanie losowego bitu (0 lub 1)
+	// Generate random bit (0 or 1)
 	randomBit := rand.Intn(2)
 
-	// Generowanie delegowanych prefixów
+	// Generate delegated prefixes
 	delegatedPrefix1, err := generateDelegatedPrefix(primaryPrefix, randomBit, userID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("błąd generowania pierwszego prefixu: %w", err)
+		return nil, nil, fmt.Errorf("error generating first prefix: %w", err)
 	}
 
 	delegatedPrefix2, err := generateDelegatedPrefix(secondaryPrefix, randomBit, userID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("błąd generowania drugiego prefixu: %w", err)
+		return nil, nil, fmt.Errorf("error generating second prefix: %w", err)
 	}
 
-	// Generowanie adresów ULA dla endpointów
+	// Generate ULA addresses for endpoints
 	ulaBase, err := parsePrefix(config.GlobalConfig.Prefixes.ULA)
 	if err != nil {
-		return nil, nil, fmt.Errorf("błąd parsowania prefixu ULA: %w", err)
+		return nil, nil, fmt.Errorf("error parsing ULA prefix: %w", err)
 	}
 
 	seq := uint64(rand.Intn(0x10000))
@@ -150,7 +150,7 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 	}
 	copy(ulaNet.IP, ulaBase.IP)
 
-	// Ustaw sekwencję w odpowiednich bajtach
+	// Set sequence in appropriate bytes
 	ulaNet.IP[6] = byte(seq >> 8)
 	ulaNet.IP[7] = byte(seq)
 
@@ -170,26 +170,26 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 		DelegatedPrefix2: delegatedPrefix2,
 	}
 
-	// Walidacja adresów IPv6
+	// Validate IPv6 addresses
 	if err := validateIPv6Address(strings.TrimSuffix(endpointLocal, "/64")); err != nil {
-		return nil, nil, fmt.Errorf("błąd walidacji endpoint_local: %w", err)
+		return nil, nil, fmt.Errorf("error validating endpoint_local: %w", err)
 	}
 	if err := validateIPv6Address(strings.TrimSuffix(endpointRemote, "/64")); err != nil {
-		return nil, nil, fmt.Errorf("błąd walidacji endpoint_remote: %w", err)
+		return nil, nil, fmt.Errorf("error validating endpoint_remote: %w", err)
 	}
 	if err := validateIPv6Address(strings.TrimSuffix(delegatedPrefix1, "/64")); err != nil {
-		return nil, nil, fmt.Errorf("błąd walidacji delegated_prefix_1: %w", err)
+		return nil, nil, fmt.Errorf("error validating delegated_prefix_1: %w", err)
 	}
 	if err := validateIPv6Address(strings.TrimSuffix(delegatedPrefix2, "/64")); err != nil {
-		return nil, nil, fmt.Errorf("błąd walidacji delegated_prefix_2: %w", err)
+		return nil, nil, fmt.Errorf("error validating delegated_prefix_2: %w", err)
 	}
 
-	// Użyj transakcji do utworzenia tunelu
+	// Use transaction to create tunnel
 	if err := CreateTunnelWithTransaction(tunnel); err != nil {
 		return nil, nil, err
 	}
 
-	// Generowanie komend systemowych
+	// Generate system commands
 	commands := &TunnelCommands{}
 	if strings.ToLower(tunnelType) == "sit" {
 		commands.Server = []string{
@@ -219,12 +219,12 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 			fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", tunnelID, clientIPv4, serverIPv4),
 			fmt.Sprintf("ip link set %s up", tunnelID),
 			fmt.Sprintf("ip -6 addr add %s dev %s", endpointRemote, tunnelID),
-			fmt.Sprintf("ip -6 addr add %s::1/64 dev %s", strings.TrimSuffix(delegatedPrefix1, "/64"), tunnelID),
-			fmt.Sprintf("ip -6 addr add %s::1/64 dev %s", strings.TrimSuffix(delegatedPrefix2, "/64"), tunnelID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix1, "/64"), tunnelID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix2, "/64"), tunnelID),
 			fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(endpointLocal, "/64"), tunnelID),
 		}
 	} else {
-		return nil, nil, errors.New("nieprawidłowy typ tunelu")
+		return nil, nil, errors.New("invalid tunnel type")
 	}
 
 	return tunnel, commands, nil
