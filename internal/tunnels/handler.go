@@ -58,6 +58,13 @@ func CreateTunnelHandler(c *gin.Context) {
 		return
 	}
 
+	// Apply security rules
+	securityCmd := exec.Command("/etc/tunnelbroker/scripts/tunnel_security.sh")
+	if err := securityCmd.Run(); err != nil {
+		applog.Logger.Printf("Error applying security rules: %v", err)
+		// Continue even if security script fails
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"tunnel":   tunnel,
 		"commands": commands,

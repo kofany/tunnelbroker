@@ -8,12 +8,20 @@ fi
 
 # Funkcja konfigurująca zabezpieczenia dla pojedynczego tunelu
 configure_tunnel_security() {
-    local IFACE=$1
+    local IFACE=$(echo "$1" | cut -d@ -f1)
     
-    # Ograniczenie prędkości do 50 Mbps
+    # Usuwanie istniejących konfiguracji
+    tc qdisc del dev $IFACE root 2>/dev/null
+    tc qdisc del dev $IFACE ingress 2>/dev/null
+    
+    # Konfiguracja dla ruchu wychodzącego (egress/upload)
     tc qdisc add dev $IFACE root handle 1: htb default 10
     tc class add dev $IFACE parent 1: classid 1:1 htb rate 50mbit ceil 50mbit
     tc filter add dev $IFACE parent 1: protocol ipv6 prio 1 u32 match ip6 src ::/0 flowid 1:1
+    
+    # Konfiguracja dla ruchu przychodzącego (ingress/download)
+    tc qdisc add dev $IFACE handle ffff: ingress
+    tc filter add dev $IFACE parent ffff: protocol ipv6 u32 match u32 0 0 police rate 50mbit burst 50k drop flowid :1
     
     # Blokowanie portów email
     iptables -A FORWARD -i $IFACE -p tcp -m multiport --dports 25,465,587,2525 -j DROP
@@ -37,12 +45,18 @@ configure_tunnel_security() {
     echo "Skonfigurowano zabezpieczenia dla interfejsu $IFACE"
 }
 
+# Usuwanie istniejących reguł
+iptables -F FORWARD
+tc qdisc del dev tun+ root 2>/dev/null
+tc qdisc del dev tun+ ingress 2>/dev/null
+
 # Konfiguracja dla wszystkich istniejących tuneli
-for iface in $(ip link show | grep 'tun-' | cut -d: -f2 | tr -d ' '); do
+for iface in $(ip link show | grep '^[0-9]*: tun-' | cut -d: -f2 | tr -d ' ' | cut -d@ -f1); do
     configure_tunnel_security $iface
 done
 
 # Zapisanie reguł iptables
+mkdir -p /etc/iptables
 iptables-save > /etc/iptables/rules.v4
 ip6tables-save > /etc/iptables/rules.v6
 
