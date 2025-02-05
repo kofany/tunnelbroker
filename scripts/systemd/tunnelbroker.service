@@ -1,0 +1,31 @@
+[Unit]
+Description=IPv6 Tunnel Broker Service
+After=network.target postgresql.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=CONFIG_PATH=/etc/tunnelbroker/config.yaml
+Environment=GIN_MODE=release
+EnvironmentFile=/etc/tunnelbroker/.env
+WorkingDirectory=/etc/tunnelbroker
+ExecStartPre=/sbin/modprobe sit
+ExecStartPre=/sbin/modprobe gre
+ExecStart=/usr/local/bin/tunnelbroker
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target 

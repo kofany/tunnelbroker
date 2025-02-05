@@ -12,7 +12,7 @@ A server application for automating IPv6 tunnel (SIT/GRE) creation and managemen
 - Automatic ULA address generation for tunnel endpoints
 - Support for dual prefix delegation (primary and secondary)
 - User-based tunnel management with limits
-- Systemd service integration
+- Systemd service integration with installation scripts
 
 ## Requirements
 
@@ -22,6 +22,31 @@ A server application for automating IPv6 tunnel (SIT/GRE) creation and managemen
 - Root privileges for tunnel management
 
 ## Installation
+
+### Automatic Installation
+
+1. Clone the repository:
+```bash
+git clone https://github.com/kofany/tunnelbroker.git
+cd tunnelbroker
+```
+
+2. Copy and customize configuration files:
+```bash
+cp .env.example .env
+cp cmd/config/config.example.yaml cmd/config/config.yaml
+```
+
+3. Edit configuration files:
+- `.env` - set database credentials
+- `cmd/config/config.yaml` - configure IPv6 prefixes, server address and API key
+
+4. Run the installation script:
+```bash
+sudo ./scripts/systemd/install.sh
+```
+
+### Manual Installation
 
 1. Clone the repository:
 ```bash
@@ -51,6 +76,13 @@ cp /etc/systemd/system/tunnelbroker.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable tunnelbroker
 systemctl start tunnelbroker
+```
+
+### Uninstallation
+
+To remove the service and all its components:
+```bash
+sudo ./scripts/systemd/uninstall.sh
 ```
 
 ## Configuration
@@ -104,6 +136,7 @@ GET /api/v1/tunnels/{tunnel_id}
 - 2 active tunnels per user limit
 - Proper IPv6 address formatting and validation
 - Automatic ULA address generation for tunnel endpoints
+- Systemd service hardening with security options
 
 ## Database Schema
 
@@ -114,10 +147,13 @@ The application uses three main tables:
 
 ## Current Status
 
-Version: v0.0.1
-- Initial release with proper IPv6 address formatting
+Version: v0.0.2
+- Added systemd integration scripts
+- Added automatic installation and uninstallation
+- Added service hardening options
+- All messages translated to English
+- Proper IPv6 address formatting
 - Full API implementation
-- Systemd service integration
 - Database integration with Supabase
 - Automatic tunnel configuration generation
 - Support for both SIT and GRE tunnels
