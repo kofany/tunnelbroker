@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kofany/tunnelbroker/internal/config"
 )
 
 // TunnelCommands zawiera listę komend systemowych dla konfiguracji tunelu.
@@ -17,6 +20,73 @@ type TunnelCommands struct {
 
 func init() {
 	rand.Seed(time.Now().UnixNano())
+}
+
+// parsePrefix parsuje prefix IPv6 i zwraca obiekt net.IPNet
+func parsePrefix(prefix string) (*net.IPNet, error) {
+	_, ipNet, err := net.ParseCIDR(prefix)
+	if err != nil {
+		return nil, fmt.Errorf("nieprawidłowy prefix IPv6: %w", err)
+	}
+	return ipNet, nil
+}
+
+// generateDelegatedPrefix generuje delegowany prefix /64 z większego prefixu
+func generateDelegatedPrefix(basePrefix string, randomBit int, userID string) (string, error) {
+	// Dodaj maskę /44 jeśli jej nie ma
+	if !strings.Contains(basePrefix, "/") {
+		basePrefix = basePrefix + "/44"
+	}
+
+	// Parsuj bazowy prefix
+	ipNet, err := parsePrefix(basePrefix)
+	if err != nil {
+		return "", err
+	}
+
+	// Sprawdź czy prefix jest /44 (wymagane dla naszej logiki)
+	ones, bits := ipNet.Mask.Size()
+	if ones != 44 {
+		return "", fmt.Errorf("prefix bazowy musi być /44, otrzymano /%d", ones)
+	}
+
+	// Konwertuj userID na liczbę
+	userNum, err := strconv.ParseUint(userID, 16, 16)
+	if err != nil {
+		return "", fmt.Errorf("nieprawidłowy userID: %w", err)
+	}
+
+	// Oblicz nowy prefix
+	newIP := make(net.IP, len(ipNet.IP))
+	copy(newIP, ipNet.IP)
+
+	// Ustaw randomBit w trzecim tercecie (indeks 5)
+	newIP[5] = byte(randomBit)
+
+	// Ustaw userID w czwartym tercecie (indeksy 6-7)
+	newIP[6] = byte(userNum >> 8)
+	newIP[7] = byte(userNum)
+
+	// Stwórz nową maskę /64
+	mask := net.CIDRMask(64, bits)
+
+	newNet := net.IPNet{
+		IP:   newIP,
+		Mask: mask,
+	}
+	return newNet.String(), nil
+}
+
+// validateIPv6Address sprawdza poprawność adresu IPv6
+func validateIPv6Address(address string) error {
+	// Usuń maskę CIDR jeśli istnieje
+	ipStr := strings.Split(address, "/")[0]
+
+	ip := net.ParseIP(ipStr)
+	if ip == nil || ip.To4() != nil {
+		return fmt.Errorf("nieprawidłowy adres IPv6: %s", address)
+	}
+	return nil
 }
 
 // CreateTunnelService wykonuje logikę biznesową tworzenia tunelu:
@@ -39,27 +109,53 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 
 	tunnelID := fmt.Sprintf("tun-%s-%d", userID, pairNumber)
 
-	// Definicja prefixów – hardkodujemy je na podstawie pary
+	// Pobranie prefixów z konfiguracji
 	var primaryPrefix, secondaryPrefix string
 	if pairNumber == 1 {
-		primaryPrefix = "2a05:dfc1:3c00"
-		secondaryPrefix = "2a12:bec0:2c00"
+		primaryPrefix = config.GlobalConfig.Prefixes.Para1.Primary
+		secondaryPrefix = config.GlobalConfig.Prefixes.Para1.Secondary
 	} else {
-		primaryPrefix = "2a05:1083:0000"
-		secondaryPrefix = "2a05:dfc3:ff00"
+		primaryPrefix = config.GlobalConfig.Prefixes.Para2.Primary
+		secondaryPrefix = config.GlobalConfig.Prefixes.Para2.Secondary
 	}
 
+	// Usunięcie maski z prefixów
+	primaryPrefix = strings.TrimSuffix(primaryPrefix, "/44")
+	secondaryPrefix = strings.TrimSuffix(secondaryPrefix, "/44")
+
 	// Generowanie losowego bitu (0 lub 1)
-	randomBit := strconv.Itoa(rand.Intn(2))
+	randomBit := rand.Intn(2)
 
-	// Konstruowanie delegowanych prefixów: format {prefix}:{random_bit}:{user_id}::/64
-	delegatedPrefix1 := fmt.Sprintf("%s:%s:%s::/64", primaryPrefix, randomBit, userID)
-	delegatedPrefix2 := fmt.Sprintf("%s:%s:%s::/64", secondaryPrefix, randomBit, userID)
+	// Generowanie delegowanych prefixów
+	delegatedPrefix1, err := generateDelegatedPrefix(primaryPrefix, randomBit, userID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("błąd generowania pierwszego prefixu: %w", err)
+	}
 
-	// Generowanie adresów endpointów z prefiksu ULA: fde4:5a50:1114:{sequence}::{1,2}/64
-	seq := fmt.Sprintf("%04x", rand.Intn(0x10000))
-	endpointLocal := fmt.Sprintf("fde4:5a50:1114:%s::1/64", seq)
-	endpointRemote := fmt.Sprintf("fde4:5a50:1114:%s::2/64", seq)
+	delegatedPrefix2, err := generateDelegatedPrefix(secondaryPrefix, randomBit, userID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("błąd generowania drugiego prefixu: %w", err)
+	}
+
+	// Generowanie adresów ULA dla endpointów
+	ulaBase, err := parsePrefix(config.GlobalConfig.Prefixes.ULA)
+	if err != nil {
+		return nil, nil, fmt.Errorf("błąd parsowania prefixu ULA: %w", err)
+	}
+
+	seq := uint64(rand.Intn(0x10000))
+	ulaNet := &net.IPNet{
+		IP:   make(net.IP, len(ulaBase.IP)),
+		Mask: net.CIDRMask(64, 128),
+	}
+	copy(ulaNet.IP, ulaBase.IP)
+
+	// Ustaw sekwencję w odpowiednich bajtach
+	ulaNet.IP[6] = byte(seq >> 8)
+	ulaNet.IP[7] = byte(seq)
+
+	endpointLocal := fmt.Sprintf("%s1/64", strings.TrimSuffix(ulaNet.String(), "/64"))
+	endpointRemote := fmt.Sprintf("%s2/64", strings.TrimSuffix(ulaNet.String(), "/64"))
 
 	tunnel := &Tunnel{
 		ID:               tunnelID,
@@ -74,13 +170,26 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 		DelegatedPrefix2: delegatedPrefix2,
 	}
 
-	// Wstawienie tunelu do bazy
-	err = InsertTunnel(tunnel)
-	if err != nil {
+	// Walidacja adresów IPv6
+	if err := validateIPv6Address(strings.TrimSuffix(endpointLocal, "/64")); err != nil {
+		return nil, nil, fmt.Errorf("błąd walidacji endpoint_local: %w", err)
+	}
+	if err := validateIPv6Address(strings.TrimSuffix(endpointRemote, "/64")); err != nil {
+		return nil, nil, fmt.Errorf("błąd walidacji endpoint_remote: %w", err)
+	}
+	if err := validateIPv6Address(strings.TrimSuffix(delegatedPrefix1, "/64")); err != nil {
+		return nil, nil, fmt.Errorf("błąd walidacji delegated_prefix_1: %w", err)
+	}
+	if err := validateIPv6Address(strings.TrimSuffix(delegatedPrefix2, "/64")); err != nil {
+		return nil, nil, fmt.Errorf("błąd walidacji delegated_prefix_2: %w", err)
+	}
+
+	// Użyj transakcji do utworzenia tunelu
+	if err := CreateTunnelWithTransaction(tunnel); err != nil {
 		return nil, nil, err
 	}
 
-	// Generowanie komend systemowych w zależności od typu tunelu
+	// Generowanie komend systemowych
 	commands := &TunnelCommands{}
 	if strings.ToLower(tunnelType) == "sit" {
 		commands.Server = []string{
@@ -94,10 +203,9 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 			fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", tunnelID, clientIPv4, serverIPv4),
 			fmt.Sprintf("ip link set %s up", tunnelID),
 			fmt.Sprintf("ip -6 addr add %s dev %s", endpointRemote, tunnelID),
-			// Dla uproszczenia wycinamy część "::" z delegowanych prefixów
-			fmt.Sprintf("ip -6 addr add %s::1/64 dev %s", delegatedPrefix1[:strings.Index(delegatedPrefix1, "::")], tunnelID),
-			fmt.Sprintf("ip -6 addr add %s::1/64 dev %s", delegatedPrefix2[:strings.Index(delegatedPrefix2, "::")], tunnelID),
-			fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", endpointLocal, tunnelID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix1, "/64"), tunnelID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix2, "/64"), tunnelID),
+			fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(endpointLocal, "/64"), tunnelID),
 		}
 	} else if strings.ToLower(tunnelType) == "gre" {
 		commands.Server = []string{
@@ -111,9 +219,9 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 			fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", tunnelID, clientIPv4, serverIPv4),
 			fmt.Sprintf("ip link set %s up", tunnelID),
 			fmt.Sprintf("ip -6 addr add %s dev %s", endpointRemote, tunnelID),
-			fmt.Sprintf("ip -6 addr add %s::1/64 dev %s", delegatedPrefix1[:strings.Index(delegatedPrefix1, "::")], tunnelID),
-			fmt.Sprintf("ip -6 addr add %s::1/64 dev %s", delegatedPrefix2[:strings.Index(delegatedPrefix2, "::")], tunnelID),
-			fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", endpointLocal, tunnelID),
+			fmt.Sprintf("ip -6 addr add %s::1/64 dev %s", strings.TrimSuffix(delegatedPrefix1, "/64"), tunnelID),
+			fmt.Sprintf("ip -6 addr add %s::1/64 dev %s", strings.TrimSuffix(delegatedPrefix2, "/64"), tunnelID),
+			fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(endpointLocal, "/64"), tunnelID),
 		}
 	} else {
 		return nil, nil, errors.New("nieprawidłowy typ tunelu")

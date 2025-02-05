@@ -1,0 +1,19 @@
+prefixes:
+  para1:
+    primary: "2a05:xxxx:xxxx::/44"    # Twój prefix IPv6
+    secondary: "2a12:xxxx:xxxx::/44"   # Twój prefix IPv6
+  para2:
+    primary: "2a05:xxxx:xxxx::/44"     # Twój prefix IPv6
+    secondary: "2a05:xxxx:xxxx::/44"   # Twój prefix IPv6
+  ula: "fde4:xxxx:xxxx::/48"          # Twój prefix ULA
+
+server:
+  ipv4: "xxx.xxx.xxx.xxx"             # Twój adres IPv4 serwera
+
+api:
+  key: "your_api_key_here"            # Twój klucz API
+  listen: "127.0.0.1:8080"            # Adres nasłuchiwania API
+
+database:
+  max_connections: 10
+  connection_lifetime: "1h" 

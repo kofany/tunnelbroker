@@ -118,3 +118,34 @@ config.yaml
 *.exe
 *.test
 *.out
+
+# Pliki konfiguracyjne z wrażliwymi danymi
+.env
+!.env.example
+cmd/config/config.yaml
+!cmd/config/config.example.yaml
+
+# Pliki binarne i tymczasowe
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.log
+/tmp
+/dist
+/build
+/tunnelbroker
+
+# IDE i system
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Go specific
+/vendor/
+go.work
+go.work.sum

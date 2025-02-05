@@ -1,6 +1,6 @@
 # TunnelBroker
 
-TunnelBroker to serwer do zarządzania tunelami IPv6 poprzez API REST.
+Serwer automatyzujący tworzenie i zarządzanie tunelami IPv6 (SIT/GRE).
 
 ## Funkcjonalności
 
@@ -12,27 +12,37 @@ TunnelBroker to serwer do zarządzania tunelami IPv6 poprzez API REST.
 
 ## Wymagania
 
-- Go 1.21 lub nowszy
-- Uprawnienia root do tworzenia tuneli
-- System Linux z obsługą tuneli SIT i GRE
-- Moduły jądra: sit, gre
+- Go 1.23 lub nowszy
+- PostgreSQL (Supabase)
+- Linux z modułami sit i gre
+- Uprawnienia root do zarządzania tunelami
 
 ## Instalacja
 
+1. Sklonuj repozytorium:
 ```bash
-# Klonowanie repozytorium
 git clone https://github.com/kofany/tunnelbroker.git
 cd tunnelbroker
+```
 
-# Instalacja zależności
+2. Skopiuj i dostosuj pliki konfiguracyjne:
+```bash
+cp .env.example .env
+cp cmd/config/config.example.yaml cmd/config/config.yaml
+```
+
+3. Edytuj pliki konfiguracyjne:
+- `.env` - ustaw dane dostępowe do bazy danych
+- `cmd/config/config.yaml` - skonfiguruj prefixy IPv6, adres serwera i klucz API
+
+4. Zainstaluj zależności:
+```bash
 go mod download
+```
 
-# Budowanie
-go build -o tunnelbroker cmd/tunnelbroker/main.go
-
-# Upewnij się, że moduły jądra są załadowane
-modprobe sit
-modprobe gre
+5. Uruchom serwer:
+```bash
+GIN_MODE=release go run cmd/tunnelbroker/main.go
 ```
 
 ## Konfiguracja
@@ -41,64 +51,39 @@ Domyślnie serwer nasłuchuje na porcie 8080. Konfiguracja przechowywana jest w 
 
 ## API
 
-### Tunele
+Serwer nasłuchuje domyślnie na `127.0.0.1:8080`. Wszystkie endpointy wymagają nagłówka `X-API-Key`.
 
-- `POST /api/v1/tunnels` - Tworzenie nowego tunelu
-- `GET /api/v1/tunnels` - Lista tuneli
-- `GET /api/v1/tunnels/{id}` - Szczegóły tunelu
-- `DELETE /api/v1/tunnels/{id}` - Usunięcie tunelu
-- `PUT /api/v1/tunnels/{id}/suspend` - Zawieszenie tunelu
-- `PUT /api/v1/tunnels/{id}/activate` - Aktywacja tunelu
+### Endpointy
 
-### Prefiksy
-
-- `POST /api/v1/prefixes` - Dodanie prefiksu
-- `GET /api/v1/prefixes` - Lista prefiksów
-- `PUT /api/v1/prefixes/endpoint` - Ustawienie prefiksu końcowego
-
-### System
-
-- `GET /api/v1/system/status` - Status systemu
-- `GET /api/v1/system/config/{id}` - Konfiguracja klienta
-
-## Przykłady użycia
-
-### Tworzenie tunelu SIT
-
+1. Tworzenie tunelu:
 ```bash
-curl -X POST http://localhost:8080/api/v1/tunnels \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "sit",
-    "client_nickname": "example",
-    "client_ipv4": "192.0.2.1",
-    "server_ipv4": "192.0.2.2"
-  }'
+POST /api/v1/tunnels
+{
+    "type": "sit|gre",
+    "user_id": "hex4",
+    "client_ipv4": "x.x.x.x"
+}
 ```
 
-### Tworzenie tunelu GRE
-
+2. Aktualizacja IP klienta:
 ```bash
-curl -X POST http://localhost:8080/api/v1/tunnels \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "gre",
-    "client_nickname": "example-gre",
-    "client_ipv4": "192.0.2.3",
-    "server_ipv4": "192.0.2.4"
-  }'
+PATCH /api/v1/tunnels/{tunnel_id}/ip
+{
+    "client_ipv4": "x.x.x.x"
+}
 ```
 
-### Dodanie prefiksu
-
+3. Usuwanie tunelu:
 ```bash
-curl -X POST http://localhost:8080/api/v1/prefixes \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prefix": "2001:db8::/32",
-    "description": "Main prefix pool"
-  }'
+DELETE /api/v1/tunnels/{tunnel_id}
 ```
+
+## Bezpieczeństwo
+
+- API dostępne tylko lokalnie (127.0.0.1)
+- Wymagany klucz API dla wszystkich żądań
+- Wrażliwe dane przechowywane w plikach konfiguracyjnych (nie w repozytorium)
+- Limit 2 aktywnych tuneli na użytkownika
 
 ## Licencja
 

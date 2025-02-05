@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/kofany/tunnelbroker/internal/db"
 )
 
@@ -20,13 +21,13 @@ func CountActiveTunnelsByUser(userID string) (int, error) {
 }
 
 // InsertTunnel wstawia rekord tunelu do bazy.
-func InsertTunnel(tunnel *Tunnel) error {
+func InsertTunnel(tunnel *Tunnel, tx pgx.Tx) error {
 	query := `
     INSERT INTO tunnels (id, user_id, type, status, server_ipv4, client_ipv4, endpoint_local, endpoint_remote, delegated_prefix_1, delegated_prefix_2, created_at)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     `
 	tunnel.CreatedAt = time.Now()
-	_, err := db.Pool.Exec(context.Background(), query,
+	_, err := tx.Exec(context.Background(), query,
 		tunnel.ID,
 		tunnel.UserID,
 		tunnel.Type,
@@ -42,6 +43,32 @@ func InsertTunnel(tunnel *Tunnel) error {
 	if err != nil {
 		return fmt.Errorf("błąd wstawiania tunelu: %w", err)
 	}
+	return nil
+}
+
+// CreateTunnelWithTransaction tworzy nowy tunel i aktualizuje liczniki użytkownika w ramach jednej transakcji
+func CreateTunnelWithTransaction(tunnel *Tunnel) error {
+	tx, err := db.Pool.Begin(context.Background())
+	if err != nil {
+		return fmt.Errorf("błąd rozpoczęcia transakcji: %w", err)
+	}
+	defer tx.Rollback(context.Background()) // rollback w przypadku błędu
+
+	// Wstaw tunel
+	if err := InsertTunnel(tunnel, tx); err != nil {
+		return err
+	}
+
+	// Zaktualizuj liczniki użytkownika
+	if err := UpdateUserCounters(tunnel.UserID, tx); err != nil {
+		return err
+	}
+
+	// Zatwierdź transakcję
+	if err := tx.Commit(context.Background()); err != nil {
+		return fmt.Errorf("błąd zatwierdzania transakcji: %w", err)
+	}
+
 	return nil
 }
 
@@ -61,6 +88,49 @@ func DeleteTunnel(tunnelID string) error {
 	_, err := db.Pool.Exec(context.Background(), query, tunnelID)
 	if err != nil {
 		return fmt.Errorf("błąd usuwania tunelu: %w", err)
+	}
+	return nil
+}
+
+// UpdateUserCounters aktualizuje liczniki tuneli użytkownika
+func UpdateUserCounters(userID string, tx pgx.Tx) error {
+	query := `
+        UPDATE users 
+        SET created_tunnels = created_tunnels + 1,
+            active_tunnels = active_tunnels + 1
+        WHERE id = $1
+    `
+	_, err := tx.Exec(context.Background(), query, userID)
+	if err != nil {
+		return fmt.Errorf("błąd aktualizacji liczników użytkownika: %w", err)
+	}
+	return nil
+}
+
+// DecrementActiveUserTunnels zmniejsza licznik aktywnych tuneli
+func DecrementActiveUserTunnels(userID string) error {
+	query := `
+        UPDATE users 
+        SET active_tunnels = active_tunnels - 1
+        WHERE id = $1
+    `
+	_, err := db.Pool.Exec(context.Background(), query, userID)
+	if err != nil {
+		return fmt.Errorf("błąd aktualizacji licznika aktywnych tuneli: %w", err)
+	}
+	return nil
+}
+
+// ResetUserCreatedTunnels resetuje licznik utworzonych tuneli
+func ResetUserCreatedTunnels(userID string) error {
+	query := `
+        UPDATE users 
+        SET created_tunnels = 0
+        WHERE id = $1
+    `
+	_, err := db.Pool.Exec(context.Background(), query, userID)
+	if err != nil {
+		return fmt.Errorf("błąd resetowania licznika tuneli: %w", err)
 	}
 	return nil
 }
