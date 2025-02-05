@@ -1,6 +1,6 @@
 [Unit]
 Description=IPv6 Tunnel Broker Service
-After=network.target postgresql.service
+After=network.target
 Wants=network.target
 
 [Service]
