@@ -13,6 +13,7 @@ EnvironmentFile=/etc/tunnelbroker/.env
 WorkingDirectory=/etc/tunnelbroker
 ExecStartPre=/sbin/modprobe sit
 ExecStartPre=/sbin/modprobe gre
+ExecStartPre=/etc/tunnelbroker/scripts/tunnel_security.sh
 ExecStart=/usr/local/bin/tunnelbroker
 Restart=always
 RestartSec=5
@@ -20,12 +21,13 @@ LimitNOFILE=65535
 
 # Security
 NoNewPrivileges=true
-ProtectSystem=full
+ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
+ReadWritePaths=/etc/iptables
 
 [Install]
 WantedBy=multi-user.target 
