@@ -23,8 +23,8 @@ func CountActiveTunnelsByUser(userID string) (int, error) {
 // InsertTunnel inserts a tunnel record into the database.
 func InsertTunnel(tunnel *Tunnel, tx pgx.Tx) error {
 	query := `
-    INSERT INTO tunnels (id, user_id, type, status, server_ipv4, client_ipv4, endpoint_local, endpoint_remote, delegated_prefix_1, delegated_prefix_2, created_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    INSERT INTO tunnels (id, user_id, type, status, server_ipv4, client_ipv4, endpoint_local, endpoint_remote, delegated_prefix_1, delegated_prefix_2, delegated_prefix_3, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
     `
 	tunnel.CreatedAt = time.Now()
 	_, err := tx.Exec(context.Background(), query,
@@ -38,6 +38,7 @@ func InsertTunnel(tunnel *Tunnel, tx pgx.Tx) error {
 		tunnel.EndpointRemote,
 		tunnel.DelegatedPrefix1,
 		tunnel.DelegatedPrefix2,
+		tunnel.DelegatedPrefix3,
 		tunnel.CreatedAt,
 	)
 	if err != nil {
@@ -95,7 +96,7 @@ func DeleteTunnel(tunnelID string) error {
 // UpdateUserCounters updates user tunnel counters
 func UpdateUserCounters(userID string, tx pgx.Tx) error {
 	query := `
-        UPDATE users 
+        UPDATE users
         SET created_tunnels = created_tunnels + 1,
             active_tunnels = active_tunnels + 1
         WHERE id = $1
@@ -110,7 +111,7 @@ func UpdateUserCounters(userID string, tx pgx.Tx) error {
 // DecrementActiveUserTunnels decrements the active tunnels counter
 func DecrementActiveUserTunnels(userID string) error {
 	query := `
-        UPDATE users 
+        UPDATE users
         SET active_tunnels = active_tunnels - 1
         WHERE id = $1
     `
@@ -124,7 +125,7 @@ func DecrementActiveUserTunnels(userID string) error {
 // ResetUserCreatedTunnels resets the created tunnels counter
 func ResetUserCreatedTunnels(userID string) error {
 	query := `
-        UPDATE users 
+        UPDATE users
         SET created_tunnels = 0
         WHERE id = $1
     `
@@ -138,9 +139,9 @@ func ResetUserCreatedTunnels(userID string) error {
 // GetAllTunnels returns all tunnels from the database
 func GetAllTunnels() ([]Tunnel, error) {
 	query := `
-		SELECT id, user_id, type, status, server_ipv4, client_ipv4, 
-		       endpoint_local, endpoint_remote, delegated_prefix_1, 
-		       delegated_prefix_2, created_at
+		SELECT id, user_id, type, status, server_ipv4, client_ipv4,
+		       endpoint_local, endpoint_remote, delegated_prefix_1,
+		       delegated_prefix_2, delegated_prefix_3, created_at
 		FROM tunnels
 		ORDER BY created_at DESC
 	`
@@ -156,7 +157,7 @@ func GetAllTunnels() ([]Tunnel, error) {
 		err := rows.Scan(
 			&t.ID, &t.UserID, &t.Type, &t.Status, &t.ServerIPv4,
 			&t.ClientIPv4, &t.EndpointLocal, &t.EndpointRemote,
-			&t.DelegatedPrefix1, &t.DelegatedPrefix2, &t.CreatedAt,
+			&t.DelegatedPrefix1, &t.DelegatedPrefix2, &t.DelegatedPrefix3, &t.CreatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error scanning row: %w", err)
@@ -169,9 +170,9 @@ func GetAllTunnels() ([]Tunnel, error) {
 // GetUserTunnels returns tunnels for a specific user
 func GetUserTunnels(userID string) ([]Tunnel, error) {
 	query := `
-		SELECT id, user_id, type, status, server_ipv4, client_ipv4, 
-		       endpoint_local, endpoint_remote, delegated_prefix_1, 
-		       delegated_prefix_2, created_at
+		SELECT id, user_id, type, status, server_ipv4, client_ipv4,
+		       endpoint_local, endpoint_remote, delegated_prefix_1,
+		       delegated_prefix_2, delegated_prefix_3, created_at
 		FROM tunnels
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -188,7 +189,7 @@ func GetUserTunnels(userID string) ([]Tunnel, error) {
 		err := rows.Scan(
 			&t.ID, &t.UserID, &t.Type, &t.Status, &t.ServerIPv4,
 			&t.ClientIPv4, &t.EndpointLocal, &t.EndpointRemote,
-			&t.DelegatedPrefix1, &t.DelegatedPrefix2, &t.CreatedAt,
+			&t.DelegatedPrefix1, &t.DelegatedPrefix2, &t.DelegatedPrefix3, &t.CreatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error scanning row: %w", err)
@@ -201,9 +202,9 @@ func GetUserTunnels(userID string) ([]Tunnel, error) {
 // GetTunnelByID returns a tunnel with the given ID
 func GetTunnelByID(tunnelID string) (*Tunnel, error) {
 	query := `
-		SELECT id, user_id, type, status, server_ipv4, client_ipv4, 
-		       endpoint_local, endpoint_remote, delegated_prefix_1, 
-		       delegated_prefix_2, created_at
+		SELECT id, user_id, type, status, server_ipv4, client_ipv4,
+		       endpoint_local, endpoint_remote, delegated_prefix_1,
+		       delegated_prefix_2, delegated_prefix_3, created_at
 		FROM tunnels
 		WHERE id = $1
 	`
@@ -212,7 +213,7 @@ func GetTunnelByID(tunnelID string) (*Tunnel, error) {
 		&tunnel.ID, &tunnel.UserID, &tunnel.Type, &tunnel.Status,
 		&tunnel.ServerIPv4, &tunnel.ClientIPv4, &tunnel.EndpointLocal,
 		&tunnel.EndpointRemote, &tunnel.DelegatedPrefix1,
-		&tunnel.DelegatedPrefix2, &tunnel.CreatedAt,
+		&tunnel.DelegatedPrefix2, &tunnel.DelegatedPrefix3, &tunnel.CreatedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -221,4 +222,18 @@ func GetTunnelByID(tunnelID string) (*Tunnel, error) {
 		return nil, fmt.Errorf("error retrieving tunnel: %w", err)
 	}
 	return &tunnel, nil
+}
+
+// IsPrefixInUse checks if a prefix is already in use by any tunnel
+func IsPrefixInUse(prefix string) (bool, error) {
+	query := `
+		SELECT COUNT(*) FROM tunnels
+		WHERE delegated_prefix_1 = $1 OR delegated_prefix_2 = $1 OR delegated_prefix_3 = $1
+	`
+	var count int
+	err := db.Pool.QueryRow(context.Background(), query, prefix).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("error checking prefix usage: %w", err)
+	}
+	return count > 0, nil
 }

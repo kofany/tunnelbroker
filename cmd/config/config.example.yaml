@@ -6,6 +6,7 @@ prefixes:
     primary: "2a05:xxxx:xxxx::/44"     # Twój prefix IPv6
     secondary: "2a05:xxxx:xxxx::/44"   # Twój prefix IPv6
   ula: "fde4:xxxx:xxxx::/48"          # Twój prefix ULA
+  third: "2a06:xxxx:xxxx::/48"        # Twój dedykowany prefix /48 dla trzeciego prefiksu
 
 server:
   ipv4: "xxx.xxx.xxx.xxx"             # Twój adres IPv4 serwera
@@ -16,4 +17,4 @@ api:
 
 database:
   max_connections: 10
-  connection_lifetime: "1h" 
+  connection_lifetime: "1h"

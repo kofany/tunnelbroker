@@ -16,6 +16,7 @@ type PrefixConfig struct {
 	Para1 PrefixPair `yaml:"para1"`
 	Para2 PrefixPair `yaml:"para2"`
 	ULA   string     `yaml:"ula"`
+	Third string     `yaml:"third"`
 }
 
 type ServerConfig struct {
