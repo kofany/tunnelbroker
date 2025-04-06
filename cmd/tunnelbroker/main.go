@@ -42,6 +42,7 @@ func main() {
 	{
 		// Tunnel endpoints
 		api.GET("/tunnels", tunnels.GetTunnelsHandler)                     // List all tunnels or user tunnels
+		api.GET("/tunnels/user/:user_id", tunnels.GetUserTunnelsHandler)   // List tunnels for specific user
 		api.GET("/tunnels/:tunnel_id", tunnels.GetTunnelHandler)           // Get specific tunnel details
 		api.POST("/tunnels", tunnels.CreateTunnelHandler)                  // Create new tunnel
 		api.PATCH("/tunnels/:tunnel_id/ip", tunnels.UpdateClientIPHandler) // Update client IP

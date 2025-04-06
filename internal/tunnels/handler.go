@@ -213,6 +213,98 @@ func GetTunnelsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// GetUserTunnelsHandler handles GET /api/v1/tunnels/user/:user_id request
+func GetUserTunnelsHandler(c *gin.Context) {
+	userID := c.Param("user_id")
+
+	// Validate user_id format (should be 4 characters)
+	if len(userID) != 4 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user_id format. Must be 4 characters."})
+		return
+	}
+
+	// Get tunnels for the specified user
+	tunnels, err := GetUserTunnels(userID)
+	if err != nil {
+		applog.Logger.Printf("Error retrieving user tunnels: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// If no tunnels found, return empty array instead of 404
+	if len(tunnels) == 0 {
+		c.JSON(http.StatusOK, []any{})
+		return
+	}
+
+	// For each tunnel, generate commands
+	type TunnelWithCommands struct {
+		Tunnel   Tunnel         `json:"tunnel"`
+		Commands TunnelCommands `json:"commands"`
+	}
+
+	var response []TunnelWithCommands
+	for _, t := range tunnels {
+		commands := &TunnelCommands{}
+		if strings.ToLower(t.Type) == "sit" {
+			commands.Server = []string{
+				fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", t.ID, t.ServerIPv4, t.ClientIPv4),
+				fmt.Sprintf("ip link set %s up", t.ID),
+				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointLocal, t.ID),
+				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix1, t.ID),
+				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix2, t.ID),
+			}
+			// Add third prefix route if it exists
+			if t.DelegatedPrefix3 != "" {
+				commands.Server = append(commands.Server, fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix3, t.ID))
+			}
+			commands.Client = []string{
+				fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", t.ID, t.ClientIPv4, t.ServerIPv4),
+				fmt.Sprintf("ip link set %s up", t.ID),
+				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointRemote, t.ID),
+				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix1, "/64"), t.ID),
+				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix2, "/64"), t.ID),
+				fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(t.EndpointLocal, "/64"), t.ID),
+			}
+			// Add third prefix address if it exists
+			if t.DelegatedPrefix3 != "" {
+				commands.Client = append(commands.Client, fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix3, "/64"), t.ID))
+			}
+		} else if strings.ToLower(t.Type) == "gre" {
+			commands.Server = []string{
+				fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", t.ID, t.ServerIPv4, t.ClientIPv4),
+				fmt.Sprintf("ip link set %s up", t.ID),
+				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointLocal, t.ID),
+				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix1, t.ID),
+				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix2, t.ID),
+			}
+			// Add third prefix route if it exists
+			if t.DelegatedPrefix3 != "" {
+				commands.Server = append(commands.Server, fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix3, t.ID))
+			}
+			commands.Client = []string{
+				fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", t.ID, t.ClientIPv4, t.ServerIPv4),
+				fmt.Sprintf("ip link set %s up", t.ID),
+				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointRemote, t.ID),
+				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix1, "/64"), t.ID),
+				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix2, "/64"), t.ID),
+				fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(t.EndpointLocal, "/64"), t.ID),
+			}
+			// Add third prefix address if it exists
+			if t.DelegatedPrefix3 != "" {
+				commands.Client = append(commands.Client, fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix3, "/64"), t.ID))
+			}
+		}
+
+		response = append(response, TunnelWithCommands{
+			Tunnel:   t,
+			Commands: *commands,
+		})
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 // GetTunnelHandler handles GET /api/v1/tunnels/:tunnel_id request
 func GetTunnelHandler(c *gin.Context) {
 	tunnelID := c.Param("tunnel_id")
