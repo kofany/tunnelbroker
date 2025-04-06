@@ -15,6 +15,7 @@ ExecStartPre=/sbin/modprobe sit
 ExecStartPre=/sbin/modprobe gre
 ExecStartPre=/etc/tunnelbroker/scripts/tunnel_security.sh
 ExecStart=/usr/local/bin/tunnelbroker
+ExecStartPost=/usr/local/bin/tunnelrecovery
 Restart=always
 RestartSec=5
 LimitNOFILE=65535
@@ -30,4 +31,4 @@ RestrictSUIDSGID=true
 ReadWritePaths=/etc/iptables
 
 [Install]
-WantedBy=multi-user.target 
+WantedBy=multi-user.target

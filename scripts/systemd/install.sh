@@ -27,8 +27,9 @@ apt-get update
 apt-get install -y iptables-persistent iproute2
 
 # Build and install binary
-echo "Building tunnelbroker..."
+echo "Building tunnelbroker and tunnelrecovery..."
 go build -o /usr/local/bin/tunnelbroker cmd/tunnelbroker/main.go
+go build -o /usr/local/bin/tunnelrecovery cmd/tunnelrecovery/main.go
 
 # Install systemd service
 echo "Installing systemd service..."

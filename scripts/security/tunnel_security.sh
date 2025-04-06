@@ -23,30 +23,55 @@ configure_tunnel_security() {
     tc qdisc add dev $IFACE handle ffff: ingress
     tc filter add dev $IFACE parent ffff: protocol ipv6 u32 match u32 0 0 police rate 50mbit burst 50k drop flowid :1
     
-    # Blokowanie portów email
+    # IPv4 rules (dla ruchu tunelowanego)
     iptables -A FORWARD -i $IFACE -p tcp -m multiport --dports 25,465,587,2525 -j DROP
     iptables -A FORWARD -i $IFACE -p tcp -m multiport --sports 25,465,587,2525 -j DROP
     iptables -A FORWARD -i $IFACE -p tcp -m multiport --dports 110,143,993,995 -j DROP
     iptables -A FORWARD -i $IFACE -p tcp -m multiport --sports 110,143,993,995 -j DROP
     
-    # Ochrona przed DDoS
+    # Ochrona przed DDoS (IPv4)
     iptables -A FORWARD -i $IFACE -p tcp --syn -m limit --limit 1/s -j ACCEPT
     iptables -A FORWARD -i $IFACE -p tcp --syn -j DROP
-    iptables -A FORWARD -i $IFACE -p icmpv6 -m limit --limit 1/s -j ACCEPT
-    iptables -A FORWARD -i $IFACE -p icmpv6 -j DROP
+    iptables -A FORWARD -i $IFACE -p icmp -m limit --limit 1/s -j ACCEPT
+    iptables -A FORWARD -i $IFACE -p icmp -j DROP
     iptables -A FORWARD -i $IFACE -m hashlimit --hashlimit-above 10000/sec --hashlimit-burst 100 --hashlimit-mode srcip --hashlimit-name ${IFACE}_ddos -j DROP
     
-    # Dodatkowe zabezpieczenia
+    # Dodatkowe zabezpieczenia IPv4
     iptables -A FORWARD -i $IFACE -f -j DROP
     iptables -A FORWARD -i $IFACE -p tcp --tcp-flags ALL NONE -j DROP
     iptables -A FORWARD -i $IFACE -p tcp --tcp-flags ALL ALL -j DROP
     iptables -A FORWARD -i $IFACE -m state --state NEW -m limit --limit 50/second --limit-burst 50 -j ACCEPT
+
+    # IPv6 rules (dodatkowa warstwa bezpieczeństwa)
+    ip6tables -A FORWARD -i $IFACE -p tcp -m multiport --dports 25,465,587,2525 -j DROP
+    ip6tables -A FORWARD -i $IFACE -p tcp -m multiport --sports 25,465,587,2525 -j DROP
+    ip6tables -A FORWARD -i $IFACE -p tcp -m multiport --dports 110,143,993,995 -j DROP
+    ip6tables -A FORWARD -i $IFACE -p tcp -m multiport --sports 110,143,993,995 -j DROP
     
-    echo "Skonfigurowano zabezpieczenia dla interfejsu $IFACE"
+    # Ochrona przed DDoS (IPv6)
+    ip6tables -A FORWARD -i $IFACE -p tcp --syn -m limit --limit 1/s -j ACCEPT
+    ip6tables -A FORWARD -i $IFACE -p tcp --syn -j DROP
+    ip6tables -A FORWARD -i $IFACE -p icmpv6 -m limit --limit 1/s -j ACCEPT
+    ip6tables -A FORWARD -i $IFACE -p icmpv6 -j DROP
+    ip6tables -A FORWARD -i $IFACE -m hashlimit --hashlimit-above 10000/sec --hashlimit-burst 100 --hashlimit-mode srcip --hashlimit-name ${IFACE}_ddos_v6 -j DROP
+    
+    # Dodatkowe zabezpieczenia IPv6
+    ip6tables -A FORWARD -i $IFACE -m frag --fragfirst -j DROP
+    ip6tables -A FORWARD -i $IFACE -p tcp --tcp-flags ALL NONE -j DROP
+    ip6tables -A FORWARD -i $IFACE -p tcp --tcp-flags ALL ALL -j DROP
+    ip6tables -A FORWARD -i $IFACE -m state --state NEW -m limit --limit 50/second --limit-burst 50 -j ACCEPT
+    
+    # Dodatkowe reguły specyficzne dla IPv6
+    ip6tables -A FORWARD -i $IFACE -p icmpv6 --icmpv6-type redirect -j DROP
+    ip6tables -A FORWARD -i $IFACE -p icmpv6 --icmpv6-type router-advertisement -j DROP
+    ip6tables -A FORWARD -i $IFACE -p icmpv6 --icmpv6-type router-solicitation -j DROP
+    
+    echo "Skonfigurowano zabezpieczenia IPv4 i IPv6 dla interfejsu $IFACE"
 }
 
 # Usuwanie istniejących reguł
 iptables -F FORWARD
+ip6tables -F FORWARD
 tc qdisc del dev tun+ root 2>/dev/null
 tc qdisc del dev tun+ ingress 2>/dev/null
 
