@@ -82,22 +82,49 @@ func UpdateClientIPHandler(c *gin.Context) {
 		return
 	}
 
+	// Aktualizacja IP w bazie danych
 	if err := UpdateClientIPv4(tunnelID, req.ClientIPv4); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Dla uproszczenia zwracamy przykładowe komendy aktualizacji
+	// Pobranie zaktualizowanego tunelu z bazy danych
+	tunnel, err := GetTunnelByID(tunnelID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Generowanie rzeczywistych komend z uzupełnionymi wartościami
 	commands := TunnelCommands{
 		Server: []string{
-			"ip tunnel change " + tunnelID + " mode <type> remote " + req.ClientIPv4 + " ttl 255",
-		},
-		Client: []string{
-			"ip tunnel change " + tunnelID + " mode <type> remote <server_ipv4> local " + req.ClientIPv4 + " ttl 255",
+			fmt.Sprintf("ip tunnel change %s mode %s remote %s ttl 255",
+				tunnel.ID, strings.ToLower(tunnel.Type), req.ClientIPv4),
 		},
 	}
 
+	// Wykonanie komend systemowych
+	if err := executeCommands(commands.Server); err != nil {
+		applog.Logger.Printf("Error updating tunnel interface: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Tunnel update error"})
+		return
+	}
+
+	// Zwrócenie pełnych komend dla klienta
+	commands.Client = []string{
+		fmt.Sprintf("ip tunnel change %s mode %s remote %s local %s ttl 255",
+			tunnel.ID, strings.ToLower(tunnel.Type), tunnel.ServerIPv4, req.ClientIPv4),
+	}
+
+	// Zastosuj również reguły bezpieczeństwa po aktualizacji
+	securityCmd := exec.Command("/etc/tunnelbroker/scripts/tunnel_security.sh")
+	if err := securityCmd.Run(); err != nil {
+		applog.Logger.Printf("Warning: Error applying security rules after IP update: %v", err)
+		// Continue even if security script fails
+	}
+
 	c.JSON(http.StatusOK, gin.H{
+		"tunnel":   tunnel,
 		"commands": commands,
 	})
 }
@@ -105,6 +132,18 @@ func UpdateClientIPHandler(c *gin.Context) {
 // DeleteTunnelHandler handles DELETE /api/v1/tunnels/:tunnel_id request
 func DeleteTunnelHandler(c *gin.Context) {
 	tunnelID := c.Param("tunnel_id")
+
+	// Get tunnel info before deletion to retrieve user_id
+	tunnel, err := GetTunnelByID(tunnelID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Tunnel not found"})
+		} else {
+			applog.Logger.Printf("Error retrieving tunnel info for deletion: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
 
 	// First remove the interface from the system
 	command := exec.Command("ip", "tunnel", "del", tunnelID)
@@ -118,6 +157,20 @@ func DeleteTunnelHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Update user's active tunnels counter
+	if err := DecrementActiveUserTunnels(tunnel.UserID); err != nil {
+		applog.Logger.Printf("Error updating user tunnels counter: %v", err)
+		// Continue even if counter update fails
+	}
+
+	// Apply security script to refresh the rules and clean up any remaining rules
+	securityCmd := exec.Command("/etc/tunnelbroker/scripts/tunnel_security.sh")
+	if err := securityCmd.Run(); err != nil {
+		applog.Logger.Printf("Error applying security rules after tunnel deletion: %v", err)
+		// Continue even if security script fails
+	}
+
 	c.Status(http.StatusNoContent)
 }
 

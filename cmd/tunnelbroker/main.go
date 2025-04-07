@@ -3,7 +3,9 @@ package main
 import (
 	"log"
 	"os"
+	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/kofany/tunnelbroker/internal/config"
@@ -35,6 +37,20 @@ func main() {
 
 	// Initialize Gin router
 	router := gin.Default()
+
+	// Konfiguracja CORS
+	router.Use(cors.New(cors.Config{
+		// Zezwól na origin Twojego frontendu
+		AllowOrigins: []string{"https://tb.tahio.eu", "http://localhost:3000"}, // Dodaj też localhost dla developmentu
+		// Zezwól na metody, których używasz
+		AllowMethods: []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
+		// Zezwól na nagłówki, których używasz
+		AllowHeaders: []string{"Origin", "Content-Type", "Accept", "X-API-Key"},
+		// Zezwól na wysyłanie ciasteczek (jeśli potrzebne)
+		AllowCredentials: true,
+		// MaxAge określa, jak długo wynik preflight może być cachowany przez przeglądarkę
+		MaxAge: 12 * time.Hour,
+	}))
 
 	// Register API endpoints
 	api := router.Group("/api/v1")
