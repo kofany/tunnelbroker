@@ -224,6 +224,26 @@ func GetTunnelByID(tunnelID string) (*Tunnel, error) {
 	return &tunnel, nil
 }
 
+// GetUserByID returns a user with the given ID
+func GetUserByID(userID string) (*User, error) {
+	query := `
+		SELECT id, created_tunnels, active_tunnels
+		FROM users
+		WHERE id = $1
+	`
+	var user User
+	err := db.Pool.QueryRow(context.Background(), query, userID).Scan(
+		&user.ID, &user.CreatedTunnels, &user.ActiveTunnels,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("user not found with ID %s", userID)
+		}
+		return nil, fmt.Errorf("error retrieving user: %w", err)
+	}
+	return &user, nil
+}
+
 // IsPrefixInUse checks if a prefix is already in use by any tunnel
 func IsPrefixInUse(prefix string) (bool, error) {
 	query := `

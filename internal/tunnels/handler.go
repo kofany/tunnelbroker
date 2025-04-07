@@ -284,10 +284,16 @@ func GetUserTunnelsHandler(c *gin.Context) {
 		return
 	}
 
-	// If no tunnels found, return empty array instead of 404
-	if len(tunnels) == 0 {
-		c.JSON(http.StatusOK, []any{})
-		return
+	// Get user information
+	user, err := GetUserByID(userID)
+	if err != nil {
+		applog.Logger.Printf("Error retrieving user info: %v", err)
+		// Continue even if user info retrieval fails, just log the error
+		user = &User{
+			ID:             userID,
+			CreatedTunnels: 0,
+			ActiveTunnels:  0,
+		}
 	}
 
 	// For each tunnel, generate commands
@@ -296,7 +302,7 @@ func GetUserTunnelsHandler(c *gin.Context) {
 		Commands TunnelCommands `json:"commands"`
 	}
 
-	var response []TunnelWithCommands
+	var tunnelsWithCommands []TunnelWithCommands
 	for _, t := range tunnels {
 		commands := &TunnelCommands{}
 		if strings.ToLower(t.Type) == "sit" {
@@ -349,10 +355,24 @@ func GetUserTunnelsHandler(c *gin.Context) {
 			}
 		}
 
-		response = append(response, TunnelWithCommands{
+		tunnelsWithCommands = append(tunnelsWithCommands, TunnelWithCommands{
 			Tunnel:   t,
 			Commands: *commands,
 		})
+	}
+
+	// Create response with tunnels and user info
+	response := gin.H{
+		"tunnels": tunnelsWithCommands,
+		"user_info": gin.H{
+			"created_tunnels": user.CreatedTunnels,
+			"active_tunnels":  user.ActiveTunnels,
+		},
+	}
+
+	// If no tunnels found, return empty array for tunnels
+	if len(tunnels) == 0 {
+		response["tunnels"] = []any{}
 	}
 
 	c.JSON(http.StatusOK, response)
