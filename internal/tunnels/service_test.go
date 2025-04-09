@@ -53,22 +53,32 @@ func TestGenerateDelegatedPrefix(t *testing.T) {
 // Test for generateThirdPrefix function
 func TestGenerateThirdPrefix(t *testing.T) {
 	tests := []struct {
-		name       string
-		basePrefix string
-		userID     string
-		wantErr    bool
+		name           string
+		basePrefix     string
+		userID         string
+		wantErr        bool
+		expectedPrefix string
 	}{
 		{
-			name:       "valid third prefix generation",
-			basePrefix: "2a06:1234:5600::/48",
-			userID:     "abcd",
-			wantErr:    false,
+			name:           "valid third prefix generation - primary pool",
+			basePrefix:     "2a06:1234:5600::/48",
+			userID:         "abcd",
+			wantErr:        false,
+			expectedPrefix: "2a06:1234:5600",
 		},
 		{
-			name:       "invalid base prefix",
-			basePrefix: "invalid",
-			userID:     "abcd",
-			wantErr:    true,
+			name:           "valid third prefix generation - alternative pool",
+			basePrefix:     "2a05:dfc1:3ccc::/48",
+			userID:         "abcd",
+			wantErr:        false,
+			expectedPrefix: "2a05:dfc1:3ccc",
+		},
+		{
+			name:           "invalid base prefix",
+			basePrefix:     "invalid",
+			userID:         "abcd",
+			wantErr:        true,
+			expectedPrefix: "",
 		},
 	}
 
@@ -88,7 +98,7 @@ func TestGenerateThirdPrefix(t *testing.T) {
 				assert.Contains(t, prefix, tt.userID)
 
 				// Verify format is correct (no random hex in third tercet)
-				assert.Contains(t, prefix, "2a06:1234:5600")
+				assert.Contains(t, prefix, tt.expectedPrefix)
 			}
 		})
 	}

@@ -6,7 +6,8 @@ prefixes:
     primary: "2a05:xxxx:xxxx::/44"     # Twój prefix IPv6
     secondary: "2a05:xxxx:xxxx::/44"   # Twój prefix IPv6
   ula: "fde4:xxxx:xxxx::/48"          # Twój prefix ULA
-  third: "2a06:xxxx:xxxx::/48"        # Twój dedykowany prefix /48 dla trzeciego prefiksu
+  third: "2a06:xxxx:xxxx::/48"        # Twój dedykowany prefix /48 dla trzeciego prefiksu (podstawowa pula)
+  alt-third: "2a05:xxxx:xxxx::/48"     # Twój dedykowany prefix /48 dla trzeciego prefiksu (alternatywna pula)
 
 server:
   ipv4: "xxx.xxx.xxx.xxx"             # Twój adres IPv4 serwera

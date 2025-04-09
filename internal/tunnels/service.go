@@ -95,33 +95,30 @@ func generateThirdPrefix(basePrefix string, userID string) (string, error) {
 	}
 
 	// Check if prefix is /48 (required for our logic)
-	ones, bits := ipNet.Mask.Size()
+	ones, _ := ipNet.Mask.Size()
 	if ones != 48 {
 		return "", fmt.Errorf("base prefix must be /48, got /%d", ones)
 	}
 
-	// Convert userID to number
-	userNum, err := strconv.ParseUint(userID, 16, 16)
+	// Validate that userID is a valid hex number
+	_, err = strconv.ParseUint(userID, 16, 16)
 	if err != nil {
 		return "", fmt.Errorf("invalid userID: %w", err)
 	}
 
-	// Calculate new prefix
-	newIP := make(net.IP, len(ipNet.IP))
-	copy(newIP, ipNet.IP)
+	// Extract the base prefix without the mask and remove the last segment
+	parts := strings.Split(strings.Split(basePrefix, "/")[0], ":")
+	if len(parts) >= 4 {
+		// Take only the first 3 segments
+		basePrefixParts := parts[:3]
+		basePrefixWithoutMask := strings.Join(basePrefixParts, ":")
 
-	// Set userID in fifth tercet (indices 8-9)
-	newIP[8] = byte(userNum >> 8)
-	newIP[9] = byte(userNum)
-
-	// Create new /64 mask
-	mask := net.CIDRMask(64, bits)
-
-	newNet := net.IPNet{
-		IP:   newIP,
-		Mask: mask,
+		// Format: 2a03:94e0:2496:7696::/64
+		result := fmt.Sprintf("%s:%s::/64", basePrefixWithoutMask, userID)
+		return result, nil
 	}
-	return newNet.String(), nil
+
+	return "", fmt.Errorf("invalid prefix format: %s", basePrefix)
 }
 
 // validateIPv6Address checks if IPv6 address is valid
@@ -249,33 +246,92 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 	endpointRemote := fmt.Sprintf("%s2/64", strings.TrimSuffix(ulaNet.String(), "/64"))
 
 	// Generate third prefix from dedicated /48
-	thirdPrefix := config.GlobalConfig.Prefixes.Third
-	// Remove mask from third prefix
-	thirdPrefix = strings.TrimSuffix(thirdPrefix, "/48")
-
-	// Generate third prefix and check for uniqueness
+	// For the first tunnel, try to use the primary pool
+	// For the second tunnel or if primary pool prefix is already in use, use the alternative pool
 	var delegatedPrefix3 string
-	for range maxAttempts {
-		tempPrefix, err := generateThirdPrefix(thirdPrefix, userID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("error generating third prefix: %w", err)
-		}
 
-		// Check if the prefix is already in use
-		inUse, err := IsPrefixInUse(tempPrefix)
-		if err != nil {
-			return nil, nil, fmt.Errorf("error checking prefix uniqueness: %w", err)
-		}
+	// Try with primary pool first
+	primaryThirdPrefix := config.GlobalConfig.Prefixes.Third
+	// Remove mask from third prefix
+	primaryThirdPrefix = strings.TrimSuffix(primaryThirdPrefix, "/48")
 
-		if !inUse {
-			delegatedPrefix3 = tempPrefix
-			break
+	// Check if we have an alternative pool configured
+	altThirdPrefix := config.GlobalConfig.Prefixes.AltThird
+	hasAltPool := altThirdPrefix != ""
+	// Remove mask from alt third prefix if it exists
+	if hasAltPool {
+		altThirdPrefix = strings.TrimSuffix(altThirdPrefix, "/48")
+	}
+
+	// For first tunnel, try primary pool first
+	if pairNumber == 1 {
+		// Try with primary pool
+		for range maxAttempts {
+			tempPrefix, err := generateThirdPrefix(primaryThirdPrefix, userID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("error generating third prefix from primary pool: %w", err)
+			}
+
+			// Check if the prefix is already in use
+			inUse, err := IsPrefixInUse(tempPrefix)
+			if err != nil {
+				return nil, nil, fmt.Errorf("error checking prefix uniqueness: %w", err)
+			}
+
+			if !inUse {
+				delegatedPrefix3 = tempPrefix
+				break
+			}
 		}
 	}
 
-	// If we couldn't find a unique prefix after maxAttempts
+	// If we couldn't find a unique prefix in primary pool or this is the second tunnel,
+	// and we have an alternative pool, try that
+	if delegatedPrefix3 == "" && hasAltPool {
+		for range maxAttempts {
+			tempPrefix, err := generateThirdPrefix(altThirdPrefix, userID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("error generating third prefix from alternative pool: %w", err)
+			}
+
+			// Check if the prefix is already in use
+			inUse, err := IsPrefixInUse(tempPrefix)
+			if err != nil {
+				return nil, nil, fmt.Errorf("error checking prefix uniqueness: %w", err)
+			}
+
+			if !inUse {
+				delegatedPrefix3 = tempPrefix
+				break
+			}
+		}
+	}
+
+	// If we still couldn't find a unique prefix, try again with primary pool as fallback
+	// This handles the case where alt-third is not configured
+	if delegatedPrefix3 == "" && (pairNumber != 1 || !hasAltPool) {
+		for range maxAttempts {
+			tempPrefix, err := generateThirdPrefix(primaryThirdPrefix, userID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("error generating third prefix from primary pool (fallback): %w", err)
+			}
+
+			// Check if the prefix is already in use
+			inUse, err := IsPrefixInUse(tempPrefix)
+			if err != nil {
+				return nil, nil, fmt.Errorf("error checking prefix uniqueness: %w", err)
+			}
+
+			if !inUse {
+				delegatedPrefix3 = tempPrefix
+				break
+			}
+		}
+	}
+
+	// If we couldn't find a unique prefix after all attempts
 	if delegatedPrefix3 == "" {
-		return nil, nil, fmt.Errorf("could not generate a unique third prefix after %d attempts", maxAttempts)
+		return nil, nil, fmt.Errorf("could not generate a unique third prefix after multiple attempts")
 	}
 
 	tunnel := &Tunnel{
