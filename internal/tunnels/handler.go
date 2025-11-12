@@ -23,10 +23,96 @@ func executeCommands(commands []string) error {
 	return nil
 }
 
+// generateTunnelCommands generates commands for a given tunnel based on its type
+func generateTunnelCommands(t *Tunnel) *TunnelCommands {
+	commands := &TunnelCommands{}
+
+	switch strings.ToLower(t.Type) {
+	case "sit":
+		commands.Server = []string{
+			fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", t.ID, t.ServerIPv4, t.ClientIPv4),
+			fmt.Sprintf("ip link set %s up", t.ID),
+			fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointLocal, t.ID),
+			fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix1, t.ID),
+			fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix2, t.ID),
+		}
+		if t.DelegatedPrefix3 != "" {
+			commands.Server = append(commands.Server, fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix3, t.ID))
+		}
+		commands.Client = []string{
+			fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", t.ID, t.ClientIPv4, t.ServerIPv4),
+			fmt.Sprintf("ip link set %s up", t.ID),
+			fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointRemote, t.ID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix1, "/64"), t.ID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix2, "/64"), t.ID),
+			fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(t.EndpointLocal, "/64"), t.ID),
+		}
+		if t.DelegatedPrefix3 != "" {
+			commands.Client = append(commands.Client, fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix3, "/64"), t.ID))
+		}
+
+	case "gre":
+		commands.Server = []string{
+			fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", t.ID, t.ServerIPv4, t.ClientIPv4),
+			fmt.Sprintf("ip link set %s up", t.ID),
+			fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointLocal, t.ID),
+			fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix1, t.ID),
+			fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix2, t.ID),
+		}
+		if t.DelegatedPrefix3 != "" {
+			commands.Server = append(commands.Server, fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix3, t.ID))
+		}
+		commands.Client = []string{
+			fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", t.ID, t.ClientIPv4, t.ServerIPv4),
+			fmt.Sprintf("ip link set %s up", t.ID),
+			fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointRemote, t.ID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix1, "/64"), t.ID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix2, "/64"), t.ID),
+			fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(t.EndpointLocal, "/64"), t.ID),
+		}
+		if t.DelegatedPrefix3 != "" {
+			commands.Client = append(commands.Client, fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix3, "/64"), t.ID))
+		}
+
+	case "wg":
+		commands.Server = []string{
+			fmt.Sprintf("ip link add dev %s type wireguard", t.ID),
+			fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointLocal, t.ID),
+			fmt.Sprintf("wg set %s listen-port %d private-key <(echo %s) peer %s allowed-ips %s,%s,%s",
+				t.ID, t.ListenPort, t.ServerPrivateKey, t.ClientPublicKey,
+				t.EndpointRemote, t.DelegatedPrefix1, t.DelegatedPrefix2),
+			fmt.Sprintf("ip link set %s up", t.ID),
+			fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix1, t.ID),
+			fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix2, t.ID),
+		}
+		if t.DelegatedPrefix3 != "" {
+			commands.Server = append(commands.Server, fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix3, t.ID))
+		}
+		commands.Client = []string{
+			fmt.Sprintf("ip link add dev %s type wireguard", t.ID),
+			fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointRemote, t.ID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix1, "/64"), t.ID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix2, "/64"), t.ID),
+			fmt.Sprintf("wg set %s private-key <(echo %s) peer %s endpoint %s:%d allowed-ips ::/0",
+				t.ID, t.ClientPrivateKey, t.ServerPublicKey, t.ServerIPv4, t.ListenPort),
+			fmt.Sprintf("ip link set %s up", t.ID),
+			fmt.Sprintf("ip -6 route add ::/0 dev %s", t.ID),
+		}
+		if t.DelegatedPrefix3 != "" {
+			// Insert after ip -6 addr add commands (before wg set)
+			commands.Client = append(commands.Client[:3],
+				append([]string{fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix3, "/64"), t.ID)},
+					commands.Client[3:]...)...)
+		}
+	}
+
+	return commands
+}
+
 // CreateTunnelHandler handles POST /api/v1/tunnels request
 func CreateTunnelHandler(c *gin.Context) {
 	var req struct {
-		Type       string `json:"type" binding:"required,oneof=sit gre"`
+		Type       string `json:"type" binding:"required,oneof=sit gre wg"`
 		UserID     string `json:"user_id" binding:"required,len=4"`
 		ClientIPv4 string `json:"client_ipv4" binding:"required,ipv4"`
 	}
@@ -146,7 +232,14 @@ func DeleteTunnelHandler(c *gin.Context) {
 	}
 
 	// First remove the interface from the system
-	command := exec.Command("ip", "tunnel", "del", tunnelID)
+	var command *exec.Cmd
+	if strings.ToLower(tunnel.Type) == "wg" {
+		// WireGuard uses 'ip link del' instead of 'ip tunnel del'
+		command = exec.Command("ip", "link", "del", tunnelID)
+	} else {
+		// SIT and GRE use 'ip tunnel del'
+		command = exec.Command("ip", "tunnel", "del", tunnelID)
+	}
 	if err := command.Run(); err != nil {
 		applog.Logger.Printf("Error removing tunnel interface %s: %v", tunnelID, err)
 		// Continue even if interface removal fails
@@ -206,56 +299,8 @@ func GetTunnelsHandler(c *gin.Context) {
 
 	var response []TunnelWithCommands
 	for _, t := range tunnels {
-		commands := &TunnelCommands{}
-		if strings.ToLower(t.Type) == "sit" {
-			commands.Server = []string{
-				fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", t.ID, t.ServerIPv4, t.ClientIPv4),
-				fmt.Sprintf("ip link set %s up", t.ID),
-				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointLocal, t.ID),
-				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix1, t.ID),
-				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix2, t.ID),
-			}
-			// Add third prefix route if it exists
-			if t.DelegatedPrefix3 != "" {
-				commands.Server = append(commands.Server, fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix3, t.ID))
-			}
-			commands.Client = []string{
-				fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", t.ID, t.ClientIPv4, t.ServerIPv4),
-				fmt.Sprintf("ip link set %s up", t.ID),
-				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointRemote, t.ID),
-				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix1, "/64"), t.ID),
-				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix2, "/64"), t.ID),
-				fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(t.EndpointLocal, "/64"), t.ID),
-			}
-			// Add third prefix address if it exists
-			if t.DelegatedPrefix3 != "" {
-				commands.Client = append(commands.Client, fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix3, "/64"), t.ID))
-			}
-		} else if strings.ToLower(t.Type) == "gre" {
-			commands.Server = []string{
-				fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", t.ID, t.ServerIPv4, t.ClientIPv4),
-				fmt.Sprintf("ip link set %s up", t.ID),
-				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointLocal, t.ID),
-				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix1, t.ID),
-				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix2, t.ID),
-			}
-			// Add third prefix route if it exists
-			if t.DelegatedPrefix3 != "" {
-				commands.Server = append(commands.Server, fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix3, t.ID))
-			}
-			commands.Client = []string{
-				fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", t.ID, t.ClientIPv4, t.ServerIPv4),
-				fmt.Sprintf("ip link set %s up", t.ID),
-				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointRemote, t.ID),
-				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix1, "/64"), t.ID),
-				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix2, "/64"), t.ID),
-				fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(t.EndpointLocal, "/64"), t.ID),
-			}
-			// Add third prefix address if it exists
-			if t.DelegatedPrefix3 != "" {
-				commands.Client = append(commands.Client, fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix3, "/64"), t.ID))
-			}
-		}
+		tCopy := t // Create a copy to pass pointer
+		commands := generateTunnelCommands(&tCopy)
 
 		response = append(response, TunnelWithCommands{
 			Tunnel:   t,
@@ -304,56 +349,8 @@ func GetUserTunnelsHandler(c *gin.Context) {
 
 	var tunnelsWithCommands []TunnelWithCommands
 	for _, t := range tunnels {
-		commands := &TunnelCommands{}
-		if strings.ToLower(t.Type) == "sit" {
-			commands.Server = []string{
-				fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", t.ID, t.ServerIPv4, t.ClientIPv4),
-				fmt.Sprintf("ip link set %s up", t.ID),
-				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointLocal, t.ID),
-				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix1, t.ID),
-				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix2, t.ID),
-			}
-			// Add third prefix route if it exists
-			if t.DelegatedPrefix3 != "" {
-				commands.Server = append(commands.Server, fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix3, t.ID))
-			}
-			commands.Client = []string{
-				fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", t.ID, t.ClientIPv4, t.ServerIPv4),
-				fmt.Sprintf("ip link set %s up", t.ID),
-				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointRemote, t.ID),
-				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix1, "/64"), t.ID),
-				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix2, "/64"), t.ID),
-				fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(t.EndpointLocal, "/64"), t.ID),
-			}
-			// Add third prefix address if it exists
-			if t.DelegatedPrefix3 != "" {
-				commands.Client = append(commands.Client, fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix3, "/64"), t.ID))
-			}
-		} else if strings.ToLower(t.Type) == "gre" {
-			commands.Server = []string{
-				fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", t.ID, t.ServerIPv4, t.ClientIPv4),
-				fmt.Sprintf("ip link set %s up", t.ID),
-				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointLocal, t.ID),
-				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix1, t.ID),
-				fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix2, t.ID),
-			}
-			// Add third prefix route if it exists
-			if t.DelegatedPrefix3 != "" {
-				commands.Server = append(commands.Server, fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix3, t.ID))
-			}
-			commands.Client = []string{
-				fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", t.ID, t.ClientIPv4, t.ServerIPv4),
-				fmt.Sprintf("ip link set %s up", t.ID),
-				fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointRemote, t.ID),
-				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix1, "/64"), t.ID),
-				fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix2, "/64"), t.ID),
-				fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(t.EndpointLocal, "/64"), t.ID),
-			}
-			// Add third prefix address if it exists
-			if t.DelegatedPrefix3 != "" {
-				commands.Client = append(commands.Client, fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix3, "/64"), t.ID))
-			}
-		}
+		tCopy := t // Create a copy to pass pointer
+		commands := generateTunnelCommands(&tCopy)
 
 		tunnelsWithCommands = append(tunnelsWithCommands, TunnelWithCommands{
 			Tunnel:   t,
@@ -394,56 +391,7 @@ func GetTunnelHandler(c *gin.Context) {
 	}
 
 	// Generowanie komend dla tunelu
-	commands := &TunnelCommands{}
-	if strings.ToLower(tunnel.Type) == "sit" {
-		commands.Server = []string{
-			fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", tunnel.ID, tunnel.ServerIPv4, tunnel.ClientIPv4),
-			fmt.Sprintf("ip link set %s up", tunnel.ID),
-			fmt.Sprintf("ip -6 addr add %s dev %s", tunnel.EndpointLocal, tunnel.ID),
-			fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix1, tunnel.ID),
-			fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix2, tunnel.ID),
-		}
-		// Add third prefix route if it exists
-		if tunnel.DelegatedPrefix3 != "" {
-			commands.Server = append(commands.Server, fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix3, tunnel.ID))
-		}
-		commands.Client = []string{
-			fmt.Sprintf("ip tunnel add %s mode sit local %s remote %s ttl 255", tunnel.ID, tunnel.ClientIPv4, tunnel.ServerIPv4),
-			fmt.Sprintf("ip link set %s up", tunnel.ID),
-			fmt.Sprintf("ip -6 addr add %s dev %s", tunnel.EndpointRemote, tunnel.ID),
-			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(tunnel.DelegatedPrefix1, "/64"), tunnel.ID),
-			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(tunnel.DelegatedPrefix2, "/64"), tunnel.ID),
-			fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(tunnel.EndpointLocal, "/64"), tunnel.ID),
-		}
-		// Add third prefix address if it exists
-		if tunnel.DelegatedPrefix3 != "" {
-			commands.Client = append(commands.Client, fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(tunnel.DelegatedPrefix3, "/64"), tunnel.ID))
-		}
-	} else if strings.ToLower(tunnel.Type) == "gre" {
-		commands.Server = []string{
-			fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", tunnel.ID, tunnel.ServerIPv4, tunnel.ClientIPv4),
-			fmt.Sprintf("ip link set %s up", tunnel.ID),
-			fmt.Sprintf("ip -6 addr add %s dev %s", tunnel.EndpointLocal, tunnel.ID),
-			fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix1, tunnel.ID),
-			fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix2, tunnel.ID),
-		}
-		// Add third prefix route if it exists
-		if tunnel.DelegatedPrefix3 != "" {
-			commands.Server = append(commands.Server, fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix3, tunnel.ID))
-		}
-		commands.Client = []string{
-			fmt.Sprintf("ip tunnel add %s mode gre local %s remote %s ttl 255", tunnel.ID, tunnel.ClientIPv4, tunnel.ServerIPv4),
-			fmt.Sprintf("ip link set %s up", tunnel.ID),
-			fmt.Sprintf("ip -6 addr add %s dev %s", tunnel.EndpointRemote, tunnel.ID),
-			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(tunnel.DelegatedPrefix1, "/64"), tunnel.ID),
-			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(tunnel.DelegatedPrefix2, "/64"), tunnel.ID),
-			fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(tunnel.EndpointLocal, "/64"), tunnel.ID),
-		}
-		// Add third prefix address if it exists
-		if tunnel.DelegatedPrefix3 != "" {
-			commands.Client = append(commands.Client, fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(tunnel.DelegatedPrefix3, "/64"), tunnel.ID))
-		}
-	}
+	commands := generateTunnelCommands(tunnel)
 
 	c.JSON(http.StatusOK, gin.H{
 		"tunnel":   tunnel,

@@ -1,14 +1,19 @@
 package tunnels
 
 import (
+	"bytes"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
-	"math/rand"
+	mathrand "math/rand"
 	"net"
+	"os/exec"
 	"strconv"
 	"strings"
 
 	"github.com/kofany/tunnelbroker/internal/config"
+	"golang.org/x/crypto/curve25519"
 )
 
 // TunnelCommands zawiera listę komend systemowych dla konfiguracji tunelu.
@@ -61,7 +66,7 @@ func generateDelegatedPrefix(basePrefix string, randomBit int, userID string) (s
 
 	// Use randomBit to influence the generated hex for last position in third tercet (0-F)
 	// This adds more entropy to the prefix generation
-	randomHex := (rand.Intn(8) + randomBit) % 16 // 0-15 dla hex
+	randomHex := (mathrand.Intn(8) + randomBit) % 16 // 0-15 dla hex
 
 	// Set random hex in last position of third tercet (index 5)
 	newIP[5] = newIP[5]&0xF0 | byte(randomHex) // Zachowuj pierwsze 4 bity, ustaw ostatnie 4
@@ -133,6 +138,68 @@ func validateIPv6Address(address string) error {
 	return nil
 }
 
+// WireGuardKeyPair represents a WireGuard private/public key pair
+type WireGuardKeyPair struct {
+	PrivateKey string
+	PublicKey  string
+}
+
+// generateWireGuardKeyPair generates a new WireGuard private/public key pair
+// Uses curve25519 cryptography as required by WireGuard protocol
+func generateWireGuardKeyPair() (*WireGuardKeyPair, error) {
+	// Generate 32 random bytes for private key
+	var privateKey [32]byte
+	if _, err := rand.Read(privateKey[:]); err != nil {
+		return nil, fmt.Errorf("failed to generate random bytes: %w", err)
+	}
+
+	// Clamp the private key as required by Curve25519
+	// This ensures the key is in the correct format
+	privateKey[0] &= 248
+	privateKey[31] &= 127
+	privateKey[31] |= 64
+
+	// Derive the public key from the private key using Curve25519
+	var publicKey [32]byte
+	curve25519.ScalarBaseMult(&publicKey, &privateKey)
+
+	// Encode keys to base64 (WireGuard standard format)
+	keyPair := &WireGuardKeyPair{
+		PrivateKey: base64.StdEncoding.EncodeToString(privateKey[:]),
+		PublicKey:  base64.StdEncoding.EncodeToString(publicKey[:]),
+	}
+
+	return keyPair, nil
+}
+
+// generateWireGuardKeyPairWithCommand generates keys using wg command (alternative method)
+// This is a fallback method if the native Go implementation doesn't work
+func generateWireGuardKeyPairWithCommand() (*WireGuardKeyPair, error) {
+	// Generate private key
+	cmd := exec.Command("wg", "genkey")
+	var privateKeyOut bytes.Buffer
+	cmd.Stdout = &privateKeyOut
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("failed to generate private key with wg command: %w", err)
+	}
+	privateKey := strings.TrimSpace(privateKeyOut.String())
+
+	// Generate public key from private key
+	cmd = exec.Command("wg", "pubkey")
+	cmd.Stdin = strings.NewReader(privateKey)
+	var publicKeyOut bytes.Buffer
+	cmd.Stdout = &publicKeyOut
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("failed to generate public key with wg command: %w", err)
+	}
+	publicKey := strings.TrimSpace(publicKeyOut.String())
+
+	return &WireGuardKeyPair{
+		PrivateKey: privateKey,
+		PublicKey:  publicKey,
+	}, nil
+}
+
 // CreateTunnelService implements business logic for tunnel creation:
 // - Checks user tunnel limit (max 2)
 // - Generates tunnel ID, assigns prefixes and endpoints
@@ -175,7 +242,7 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 	var delegatedPrefix1 string
 	for range maxAttempts {
 		// Generate random bit (0 or 1) for each attempt
-		randomBit := rand.Intn(2)
+		randomBit := mathrand.Intn(2)
 		tempPrefix, err := generateDelegatedPrefix(primaryPrefix, randomBit, userID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("error generating first prefix: %w", err)
@@ -202,7 +269,7 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 	var delegatedPrefix2 string
 	for range maxAttempts {
 		// Generate random bit (0 or 1) for each attempt
-		randomBit := rand.Intn(2)
+		randomBit := mathrand.Intn(2)
 		tempPrefix, err := generateDelegatedPrefix(secondaryPrefix, randomBit, userID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("error generating second prefix: %w", err)
@@ -231,7 +298,7 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 		return nil, nil, fmt.Errorf("error parsing ULA prefix: %w", err)
 	}
 
-	seq := uint64(rand.Intn(0x10000))
+	seq := uint64(mathrand.Intn(0x10000))
 	ulaNet := &net.IPNet{
 		IP:   make(net.IP, len(ulaBase.IP)),
 		Mask: net.CIDRMask(64, 128),
@@ -348,6 +415,29 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 		DelegatedPrefix3: delegatedPrefix3,
 	}
 
+	// Generate WireGuard keys if tunnel type is "wg"
+	if strings.ToLower(tunnelType) == "wg" {
+		// Generate server keys
+		serverKeys, err := generateWireGuardKeyPair()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to generate server WireGuard keys: %w", err)
+		}
+
+		// Generate client keys
+		clientKeys, err := generateWireGuardKeyPair()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to generate client WireGuard keys: %w", err)
+		}
+
+		// Set WireGuard specific fields
+		tunnel.ServerPrivateKey = serverKeys.PrivateKey
+		tunnel.ServerPublicKey = serverKeys.PublicKey
+		tunnel.ClientPrivateKey = clientKeys.PrivateKey
+		tunnel.ClientPublicKey = clientKeys.PublicKey
+		// Use port 51820 for first tunnel, 51821 for second
+		tunnel.ListenPort = 51820 + (pairNumber - 1)
+	}
+
 	// Validate IPv6 addresses
 	if err := validateIPv6Address(strings.TrimSuffix(endpointLocal, "/64")); err != nil {
 		return nil, nil, fmt.Errorf("error validating endpoint_local: %w", err)
@@ -407,6 +497,30 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix2, "/64"), tunnelID),
 			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix3, "/64"), tunnelID),
 			fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(endpointLocal, "/64"), tunnelID),
+		}
+	} else if strings.ToLower(tunnelType) == "wg" {
+		// WireGuard configuration commands
+		commands.Server = []string{
+			fmt.Sprintf("ip link add dev %s type wireguard", tunnelID),
+			fmt.Sprintf("ip -6 addr add %s dev %s", endpointLocal, tunnelID),
+			fmt.Sprintf("wg set %s listen-port %d private-key <(echo %s) peer %s allowed-ips %s,%s,%s",
+				tunnelID, tunnel.ListenPort, tunnel.ServerPrivateKey, tunnel.ClientPublicKey,
+				endpointRemote, delegatedPrefix1, delegatedPrefix2),
+			fmt.Sprintf("ip link set %s up", tunnelID),
+			fmt.Sprintf("ip -6 route add %s dev %s", delegatedPrefix1, tunnelID),
+			fmt.Sprintf("ip -6 route add %s dev %s", delegatedPrefix2, tunnelID),
+			fmt.Sprintf("ip -6 route add %s dev %s", delegatedPrefix3, tunnelID),
+		}
+		commands.Client = []string{
+			fmt.Sprintf("ip link add dev %s type wireguard", tunnelID),
+			fmt.Sprintf("ip -6 addr add %s dev %s", endpointRemote, tunnelID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix1, "/64"), tunnelID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix2, "/64"), tunnelID),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix3, "/64"), tunnelID),
+			fmt.Sprintf("wg set %s private-key <(echo %s) peer %s endpoint %s:%d allowed-ips ::/0",
+				tunnelID, tunnel.ClientPrivateKey, tunnel.ServerPublicKey, serverIPv4, tunnel.ListenPort),
+			fmt.Sprintf("ip link set %s up", tunnelID),
+			fmt.Sprintf("ip -6 route add ::/0 dev %s", tunnelID),
 		}
 	} else {
 		return nil, nil, errors.New("invalid tunnel type")
