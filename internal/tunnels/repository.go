@@ -23,10 +23,33 @@ func CountActiveTunnelsByUser(userID string) (int, error) {
 // InsertTunnel inserts a tunnel record into the database.
 func InsertTunnel(tunnel *Tunnel, tx pgx.Tx) error {
 	query := `
-    INSERT INTO tunnels (id, user_id, type, status, server_ipv4, client_ipv4, endpoint_local, endpoint_remote, delegated_prefix_1, delegated_prefix_2, delegated_prefix_3, created_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    INSERT INTO tunnels (id, user_id, type, status, server_ipv4, client_ipv4, endpoint_local, endpoint_remote,
+                         delegated_prefix_1, delegated_prefix_2, delegated_prefix_3, created_at,
+                         server_private_key, server_public_key, client_private_key, client_public_key, listen_port)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
     `
 	tunnel.CreatedAt = time.Now()
+
+	// Use null for WireGuard fields if not set (for sit/gre tunnels)
+	var serverPrivateKey, serverPublicKey, clientPrivateKey, clientPublicKey interface{}
+	var listenPort interface{}
+
+	if tunnel.ServerPrivateKey != "" {
+		serverPrivateKey = tunnel.ServerPrivateKey
+	}
+	if tunnel.ServerPublicKey != "" {
+		serverPublicKey = tunnel.ServerPublicKey
+	}
+	if tunnel.ClientPrivateKey != "" {
+		clientPrivateKey = tunnel.ClientPrivateKey
+	}
+	if tunnel.ClientPublicKey != "" {
+		clientPublicKey = tunnel.ClientPublicKey
+	}
+	if tunnel.ListenPort != 0 {
+		listenPort = tunnel.ListenPort
+	}
+
 	_, err := tx.Exec(context.Background(), query,
 		tunnel.ID,
 		tunnel.UserID,
@@ -40,6 +63,11 @@ func InsertTunnel(tunnel *Tunnel, tx pgx.Tx) error {
 		tunnel.DelegatedPrefix2,
 		tunnel.DelegatedPrefix3,
 		tunnel.CreatedAt,
+		serverPrivateKey,
+		serverPublicKey,
+		clientPrivateKey,
+		clientPublicKey,
+		listenPort,
 	)
 	if err != nil {
 		return fmt.Errorf("error inserting tunnel: %w", err)
@@ -141,7 +169,8 @@ func GetAllTunnels() ([]Tunnel, error) {
 	query := `
 		SELECT id, user_id, type, status, server_ipv4, client_ipv4,
 		       endpoint_local, endpoint_remote, delegated_prefix_1,
-		       delegated_prefix_2, delegated_prefix_3, created_at
+		       delegated_prefix_2, delegated_prefix_3, created_at,
+		       server_private_key, server_public_key, client_private_key, client_public_key, listen_port
 		FROM tunnels
 		ORDER BY created_at DESC
 	`
@@ -154,14 +183,36 @@ func GetAllTunnels() ([]Tunnel, error) {
 	var tunnels []Tunnel
 	for rows.Next() {
 		var t Tunnel
+		var serverPrivateKey, serverPublicKey, clientPrivateKey, clientPublicKey *string
+		var listenPort *int
+
 		err := rows.Scan(
 			&t.ID, &t.UserID, &t.Type, &t.Status, &t.ServerIPv4,
 			&t.ClientIPv4, &t.EndpointLocal, &t.EndpointRemote,
 			&t.DelegatedPrefix1, &t.DelegatedPrefix2, &t.DelegatedPrefix3, &t.CreatedAt,
+			&serverPrivateKey, &serverPublicKey, &clientPrivateKey, &clientPublicKey, &listenPort,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error scanning row: %w", err)
 		}
+
+		// Handle nullable WireGuard fields
+		if serverPrivateKey != nil {
+			t.ServerPrivateKey = *serverPrivateKey
+		}
+		if serverPublicKey != nil {
+			t.ServerPublicKey = *serverPublicKey
+		}
+		if clientPrivateKey != nil {
+			t.ClientPrivateKey = *clientPrivateKey
+		}
+		if clientPublicKey != nil {
+			t.ClientPublicKey = *clientPublicKey
+		}
+		if listenPort != nil {
+			t.ListenPort = *listenPort
+		}
+
 		tunnels = append(tunnels, t)
 	}
 	return tunnels, nil
@@ -172,7 +223,8 @@ func GetUserTunnels(userID string) ([]Tunnel, error) {
 	query := `
 		SELECT id, user_id, type, status, server_ipv4, client_ipv4,
 		       endpoint_local, endpoint_remote, delegated_prefix_1,
-		       delegated_prefix_2, delegated_prefix_3, created_at
+		       delegated_prefix_2, delegated_prefix_3, created_at,
+		       server_private_key, server_public_key, client_private_key, client_public_key, listen_port
 		FROM tunnels
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -186,14 +238,36 @@ func GetUserTunnels(userID string) ([]Tunnel, error) {
 	var tunnels []Tunnel
 	for rows.Next() {
 		var t Tunnel
+		var serverPrivateKey, serverPublicKey, clientPrivateKey, clientPublicKey *string
+		var listenPort *int
+
 		err := rows.Scan(
 			&t.ID, &t.UserID, &t.Type, &t.Status, &t.ServerIPv4,
 			&t.ClientIPv4, &t.EndpointLocal, &t.EndpointRemote,
 			&t.DelegatedPrefix1, &t.DelegatedPrefix2, &t.DelegatedPrefix3, &t.CreatedAt,
+			&serverPrivateKey, &serverPublicKey, &clientPrivateKey, &clientPublicKey, &listenPort,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error scanning row: %w", err)
 		}
+
+		// Handle nullable WireGuard fields
+		if serverPrivateKey != nil {
+			t.ServerPrivateKey = *serverPrivateKey
+		}
+		if serverPublicKey != nil {
+			t.ServerPublicKey = *serverPublicKey
+		}
+		if clientPrivateKey != nil {
+			t.ClientPrivateKey = *clientPrivateKey
+		}
+		if clientPublicKey != nil {
+			t.ClientPublicKey = *clientPublicKey
+		}
+		if listenPort != nil {
+			t.ListenPort = *listenPort
+		}
+
 		tunnels = append(tunnels, t)
 	}
 	return tunnels, nil
@@ -204,16 +278,21 @@ func GetTunnelByID(tunnelID string) (*Tunnel, error) {
 	query := `
 		SELECT id, user_id, type, status, server_ipv4, client_ipv4,
 		       endpoint_local, endpoint_remote, delegated_prefix_1,
-		       delegated_prefix_2, delegated_prefix_3, created_at
+		       delegated_prefix_2, delegated_prefix_3, created_at,
+		       server_private_key, server_public_key, client_private_key, client_public_key, listen_port
 		FROM tunnels
 		WHERE id = $1
 	`
 	var tunnel Tunnel
+	var serverPrivateKey, serverPublicKey, clientPrivateKey, clientPublicKey *string
+	var listenPort *int
+
 	err := db.Pool.QueryRow(context.Background(), query, tunnelID).Scan(
 		&tunnel.ID, &tunnel.UserID, &tunnel.Type, &tunnel.Status,
 		&tunnel.ServerIPv4, &tunnel.ClientIPv4, &tunnel.EndpointLocal,
 		&tunnel.EndpointRemote, &tunnel.DelegatedPrefix1,
 		&tunnel.DelegatedPrefix2, &tunnel.DelegatedPrefix3, &tunnel.CreatedAt,
+		&serverPrivateKey, &serverPublicKey, &clientPrivateKey, &clientPublicKey, &listenPort,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -221,6 +300,24 @@ func GetTunnelByID(tunnelID string) (*Tunnel, error) {
 		}
 		return nil, fmt.Errorf("error retrieving tunnel: %w", err)
 	}
+
+	// Handle nullable WireGuard fields
+	if serverPrivateKey != nil {
+		tunnel.ServerPrivateKey = *serverPrivateKey
+	}
+	if serverPublicKey != nil {
+		tunnel.ServerPublicKey = *serverPublicKey
+	}
+	if clientPrivateKey != nil {
+		tunnel.ClientPrivateKey = *clientPrivateKey
+	}
+	if clientPublicKey != nil {
+		tunnel.ClientPublicKey = *clientPublicKey
+	}
+	if listenPort != nil {
+		tunnel.ListenPort = *listenPort
+	}
+
 	return &tunnel, nil
 }
 

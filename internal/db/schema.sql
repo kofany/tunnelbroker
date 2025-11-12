@@ -234,8 +234,13 @@ CREATE TABLE public.tunnels (
     delegated_prefix_2 text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     delegated_prefix_3 text,
+    server_private_key text,
+    server_public_key text,
+    client_private_key text,
+    client_public_key text,
+    listen_port integer,
     CONSTRAINT tunnels_status_check CHECK ((status = ANY (ARRAY['active'::text, 'suspended'::text]))),
-    CONSTRAINT tunnels_type_check CHECK ((type = ANY (ARRAY['sit'::text, 'gre'::text])))
+    CONSTRAINT tunnels_type_check CHECK ((type = ANY (ARRAY['sit'::text, 'gre'::text, 'wg'::text])))
 );
 
 
@@ -244,6 +249,41 @@ CREATE TABLE public.tunnels (
 --
 
 COMMENT ON COLUMN public.tunnels.delegated_prefix_3 IS 'Third delegated /64 prefix from dedicated /48 range';
+
+
+--
+-- Name: COLUMN tunnels.server_private_key; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.tunnels.server_private_key IS 'WireGuard server private key (base64 encoded)';
+
+
+--
+-- Name: COLUMN tunnels.server_public_key; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.tunnels.server_public_key IS 'WireGuard server public key (base64 encoded)';
+
+
+--
+-- Name: COLUMN tunnels.client_private_key; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.tunnels.client_private_key IS 'WireGuard client private key (base64 encoded)';
+
+
+--
+-- Name: COLUMN tunnels.client_public_key; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.tunnels.client_public_key IS 'WireGuard client public key (base64 encoded)';
+
+
+--
+-- Name: COLUMN tunnels.listen_port; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.tunnels.listen_port IS 'WireGuard listen port (typically 51820-51821)';
 
 
 --
