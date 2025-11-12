@@ -137,6 +137,7 @@ cmd/config/config.yaml
 /dist
 /build
 /tunnelbroker
+/tunnelrecovery
 
 # IDE i system
 .idea/
