@@ -136,16 +136,17 @@ func UpdateUserCounters(userID string, tx pgx.Tx) error {
 	return nil
 }
 
-// DecrementActiveUserTunnels decrements the active tunnels counter
-func DecrementActiveUserTunnels(userID string) error {
+// DecrementUserTunnels decrements both active and created tunnels counters
+func DecrementUserTunnels(userID string) error {
 	query := `
         UPDATE users
-        SET active_tunnels = active_tunnels - 1
+        SET active_tunnels = GREATEST(active_tunnels - 1, 0),
+            created_tunnels = GREATEST(created_tunnels - 1, 0)
         WHERE id = $1
     `
 	_, err := db.Pool.Exec(context.Background(), query, userID)
 	if err != nil {
-		return fmt.Errorf("error updating active tunnels counter: %w", err)
+		return fmt.Errorf("error updating user tunnels counters: %w", err)
 	}
 	return nil
 }

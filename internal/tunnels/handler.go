@@ -298,8 +298,8 @@ func DeleteTunnelHandler(c *gin.Context) {
 		return
 	}
 
-	// Update user's active tunnels counter
-	if err := DecrementActiveUserTunnels(tunnel.UserID); err != nil {
+	// Update user's tunnel counters (both active and created)
+	if err := DecrementUserTunnels(tunnel.UserID); err != nil {
 		applog.Logger.Printf("Error updating user tunnels counter: %v", err)
 		// Continue even if counter update fails
 	}
