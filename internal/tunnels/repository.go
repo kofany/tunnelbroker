@@ -355,3 +355,14 @@ func IsPrefixInUse(prefix string) (bool, error) {
 	}
 	return count > 0, nil
 }
+
+// TunnelIDExists checks if a tunnel with the given ID already exists
+func TunnelIDExists(tunnelID string) (bool, error) {
+	query := `SELECT COUNT(*) FROM tunnels WHERE id = $1`
+	var count int
+	err := db.Pool.QueryRow(context.Background(), query, tunnelID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("error checking tunnel ID: %w", err)
+	}
+	return count > 0, nil
+}

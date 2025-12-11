@@ -213,12 +213,25 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 	if count >= 2 {
 		return nil, nil, errors.New("limit of 2 active tunnels per user has been reached")
 	}
-	pairNumber := 1
-	if count == 1 {
-		pairNumber = 2
-	}
 
-	tunnelID := fmt.Sprintf("tun-%s-%d", userID, pairNumber)
+	// Find next available pair number (check if tunnel ID already exists)
+	var pairNumber int
+	var tunnelID string
+	for i := 1; i <= 2; i++ {
+		candidateID := fmt.Sprintf("tun-%s-%d", userID, i)
+		exists, err := TunnelIDExists(candidateID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error checking tunnel ID: %w", err)
+		}
+		if !exists {
+			pairNumber = i
+			tunnelID = candidateID
+			break
+		}
+	}
+	if tunnelID == "" {
+		return nil, nil, errors.New("no available tunnel slot found")
+	}
 
 	// Get prefixes from configuration
 	var primaryPrefix, secondaryPrefix string
