@@ -29,6 +29,16 @@ func main() {
 		log.Fatalf("Error loading configuration: %v", err)
 	}
 
+	// Initialize WireGuard interface if configured
+	if config.GlobalConfig.WireGuard.Interface != "" {
+		if err := config.InitWireGuardInterface(); err != nil {
+			log.Printf("Warning: Could not initialize WireGuard interface: %v", err)
+			// Don't fail, WireGuard might not be available on development machine
+		} else {
+			log.Printf("WireGuard interface %s initialized", config.GlobalConfig.WireGuard.Interface)
+		}
+	}
+
 	// Initialize database connection
 	if err := db.InitDB(); err != nil {
 		log.Fatalf("Error connecting to database: %v", err)

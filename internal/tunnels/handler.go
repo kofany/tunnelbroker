@@ -75,35 +75,49 @@ func generateTunnelCommands(t *Tunnel) *TunnelCommands {
 		}
 
 	case "wg":
+		// WireGuard uses single wg0 interface with multiple peers
+		wgInterface := config.GlobalConfig.WireGuard.Interface
+		wgPort := config.GlobalConfig.WireGuard.ListenPort
+		serverPubKey := config.GlobalConfig.WireGuard.PublicKey
+
+		// Build allowed-ips list including all prefixes
+		allowedIPs := fmt.Sprintf("%s,%s", t.EndpointRemote, t.DelegatedPrefix1)
+		if t.DelegatedPrefix2 != "" {
+			allowedIPs += "," + t.DelegatedPrefix2
+		}
+		if t.DelegatedPrefix3 != "" {
+			allowedIPs += "," + t.DelegatedPrefix3
+		}
+
+		// Server-side: add peer to wg0 and routes
 		commands.Server = []string{
-			fmt.Sprintf("ip link add dev %s type wireguard", t.ID),
-			fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointLocal, t.ID),
-			fmt.Sprintf("wg set %s listen-port %d private-key <(echo %s) peer %s allowed-ips %s,%s,%s",
-				t.ID, t.ListenPort, t.ServerPrivateKey, t.ClientPublicKey,
-				t.EndpointRemote, t.DelegatedPrefix1, t.DelegatedPrefix2),
-			fmt.Sprintf("ip link set %s up", t.ID),
-			fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix1, t.ID),
-			fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix2, t.ID),
+			fmt.Sprintf("wg set %s peer %s allowed-ips %s", wgInterface, t.ClientPublicKey, allowedIPs),
+			fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix1, wgInterface),
+			fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix2, wgInterface),
 		}
 		if t.DelegatedPrefix3 != "" {
-			commands.Server = append(commands.Server, fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix3, t.ID))
+			commands.Server = append(commands.Server, fmt.Sprintf("ip -6 route add %s dev %s", t.DelegatedPrefix3, wgInterface))
 		}
+
+		// Client-side commands (for user to run)
+		clientInterface := t.ID // Client uses tunnel ID as interface name
 		commands.Client = []string{
-			fmt.Sprintf("ip link add dev %s type wireguard", t.ID),
-			fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointRemote, t.ID),
-			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix1, "/64"), t.ID),
-			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix2, "/64"), t.ID),
-			fmt.Sprintf("wg set %s private-key <(echo %s) peer %s endpoint %s:%d allowed-ips ::/0",
-				t.ID, t.ClientPrivateKey, t.ServerPublicKey, t.ServerIPv4, t.ListenPort),
-			fmt.Sprintf("ip link set %s up", t.ID),
-			fmt.Sprintf("ip -6 route add ::/0 dev %s", t.ID),
+			fmt.Sprintf("ip link add dev %s type wireguard", clientInterface),
+			fmt.Sprintf("ip -6 addr add %s dev %s", t.EndpointRemote, clientInterface),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix1, "/64"), clientInterface),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix2, "/64"), clientInterface),
 		}
 		if t.DelegatedPrefix3 != "" {
-			// Insert after ip -6 addr add commands (before wg set)
-			commands.Client = append(commands.Client[:3],
-				append([]string{fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix3, "/64"), t.ID)},
-					commands.Client[3:]...)...)
+			commands.Client = append(commands.Client, fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(t.DelegatedPrefix3, "/64"), clientInterface))
 		}
+		// WireGuard config command - client stores private key in file
+		commands.Client = append(commands.Client,
+			fmt.Sprintf("echo '%s' > /etc/wireguard/%s_private.key && chmod 600 /etc/wireguard/%s_private.key", t.ClientPrivateKey, clientInterface, clientInterface),
+			fmt.Sprintf("wg set %s private-key /etc/wireguard/%s_private.key peer %s endpoint %s:%d allowed-ips ::/0",
+				clientInterface, clientInterface, serverPubKey, t.ServerIPv4, wgPort),
+			fmt.Sprintf("ip link set %s up", clientInterface),
+			fmt.Sprintf("ip -6 route add ::/0 dev %s", clientInterface),
+		)
 	}
 
 	return commands
@@ -181,25 +195,42 @@ func UpdateClientIPHandler(c *gin.Context) {
 		return
 	}
 
-	// Generowanie rzeczywistych komend z uzupełnionymi wartościami
-	commands := TunnelCommands{
-		Server: []string{
+	// Generowanie komend zależnie od typu tunelu
+	var commands TunnelCommands
+
+	tunnelType := strings.ToLower(tunnel.Type)
+	if tunnelType == "wg" {
+		// WireGuard: no server-side command needed for IP update
+		// WireGuard automatically discovers client endpoint after handshake
+		// We only update the database entry
+		commands.Server = []string{} // No-op on server side
+
+		// Client commands for reference (new endpoint configuration)
+		wgPort := config.GlobalConfig.WireGuard.ListenPort
+		commands.Client = []string{
+			fmt.Sprintf("# WireGuard automatically handles endpoint changes after handshake"),
+			fmt.Sprintf("# If needed, reconfigure: wg set %s peer <server_pubkey> endpoint %s:%d",
+				tunnel.ID, tunnel.ServerIPv4, wgPort),
+		}
+	} else {
+		// SIT/GRE tunnels
+		commands.Server = []string{
 			fmt.Sprintf("ip tunnel change %s mode %s remote %s ttl 255",
-				tunnel.ID, strings.ToLower(tunnel.Type), req.ClientIPv4),
-		},
+				tunnel.ID, tunnelType, req.ClientIPv4),
+		}
+		commands.Client = []string{
+			fmt.Sprintf("ip tunnel change %s mode %s remote %s local %s ttl 255",
+				tunnel.ID, tunnelType, tunnel.ServerIPv4, req.ClientIPv4),
+		}
 	}
 
-	// Wykonanie komend systemowych
-	if err := executeCommands(commands.Server); err != nil {
-		applog.Logger.Printf("Error updating tunnel interface: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Tunnel update error"})
-		return
-	}
-
-	// Zwrócenie pełnych komend dla klienta
-	commands.Client = []string{
-		fmt.Sprintf("ip tunnel change %s mode %s remote %s local %s ttl 255",
-			tunnel.ID, strings.ToLower(tunnel.Type), tunnel.ServerIPv4, req.ClientIPv4),
+	// Wykonanie komend systemowych (tylko dla nie-WG)
+	if len(commands.Server) > 0 && tunnelType != "wg" {
+		if err := executeCommands(commands.Server); err != nil {
+			applog.Logger.Printf("Error updating tunnel interface: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Tunnel update error"})
+			return
+		}
 	}
 
 	// Zastosuj również reguły bezpieczeństwa po aktualizacji
@@ -231,18 +262,34 @@ func DeleteTunnelHandler(c *gin.Context) {
 		return
 	}
 
-	// First remove the interface from the system
-	var command *exec.Cmd
-	if strings.ToLower(tunnel.Type) == "wg" {
-		// WireGuard uses 'ip link del' instead of 'ip tunnel del'
-		command = exec.Command("ip", "link", "del", tunnelID)
+	// Remove tunnel from system
+	tunnelType := strings.ToLower(tunnel.Type)
+	if tunnelType == "wg" {
+		// WireGuard: remove peer from wg0 and routes
+		wgInterface := config.GlobalConfig.WireGuard.Interface
+
+		// Remove peer from wg0
+		peerCmd := exec.Command("wg", "set", wgInterface, "peer", tunnel.ClientPublicKey, "remove")
+		if err := peerCmd.Run(); err != nil {
+			applog.Logger.Printf("Error removing WireGuard peer %s: %v", tunnel.ClientPublicKey, err)
+		}
+
+		// Remove routes
+		for _, prefix := range []string{tunnel.DelegatedPrefix1, tunnel.DelegatedPrefix2, tunnel.DelegatedPrefix3} {
+			if prefix != "" {
+				routeCmd := exec.Command("ip", "-6", "route", "del", prefix, "dev", wgInterface)
+				if err := routeCmd.Run(); err != nil {
+					applog.Logger.Printf("Error removing route %s: %v", prefix, err)
+				}
+			}
+		}
 	} else {
 		// SIT and GRE use 'ip tunnel del'
-		command = exec.Command("ip", "tunnel", "del", tunnelID)
-	}
-	if err := command.Run(); err != nil {
-		applog.Logger.Printf("Error removing tunnel interface %s: %v", tunnelID, err)
-		// Continue even if interface removal fails
+		command := exec.Command("ip", "tunnel", "del", tunnelID)
+		if err := command.Run(); err != nil {
+			applog.Logger.Printf("Error removing tunnel interface %s: %v", tunnelID, err)
+			// Continue even if interface removal fails
+		}
 	}
 
 	// Then delete from database

@@ -415,27 +415,21 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 		DelegatedPrefix3: delegatedPrefix3,
 	}
 
-	// Generate WireGuard keys if tunnel type is "wg"
+	// Generate WireGuard client keys if tunnel type is "wg"
 	if strings.ToLower(tunnelType) == "wg" {
-		// Generate server keys
-		serverKeys, err := generateWireGuardKeyPair()
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to generate server WireGuard keys: %w", err)
-		}
-
-		// Generate client keys
+		// Generate client keys only - server uses global wg0 keypair from config
 		clientKeys, err := generateWireGuardKeyPair()
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to generate client WireGuard keys: %w", err)
 		}
 
-		// Set WireGuard specific fields
-		tunnel.ServerPrivateKey = serverKeys.PrivateKey
-		tunnel.ServerPublicKey = serverKeys.PublicKey
+		// Set WireGuard client key fields
+		// ServerPrivateKey and ServerPublicKey are no longer per-tunnel (global wg0)
+		tunnel.ServerPublicKey = config.GlobalConfig.WireGuard.PublicKey
 		tunnel.ClientPrivateKey = clientKeys.PrivateKey
 		tunnel.ClientPublicKey = clientKeys.PublicKey
-		// Use port 51820 for first tunnel, 51821 for second
-		tunnel.ListenPort = 51820 + (pairNumber - 1)
+		// ListenPort is now global from config
+		tunnel.ListenPort = config.GlobalConfig.WireGuard.ListenPort
 	}
 
 	// Validate IPv6 addresses
@@ -499,28 +493,36 @@ func CreateTunnelService(tunnelType, userID, clientIPv4, serverIPv4 string) (*Tu
 			fmt.Sprintf("ip -6 route add ::/0 via %s dev %s", strings.TrimSuffix(endpointLocal, "/64"), tunnelID),
 		}
 	} else if strings.ToLower(tunnelType) == "wg" {
-		// WireGuard configuration commands
+		// WireGuard configuration commands - using single wg0 interface with peers
+		wgInterface := config.GlobalConfig.WireGuard.Interface
+		wgPort := config.GlobalConfig.WireGuard.ListenPort
+		serverPubKey := config.GlobalConfig.WireGuard.PublicKey
+
+		// Build allowed-ips list including all prefixes
+		allowedIPs := fmt.Sprintf("%s,%s,%s,%s", endpointRemote, delegatedPrefix1, delegatedPrefix2, delegatedPrefix3)
+
+		// Server-side: add peer to wg0 and routes
 		commands.Server = []string{
-			fmt.Sprintf("ip link add dev %s type wireguard", tunnelID),
-			fmt.Sprintf("ip -6 addr add %s dev %s", endpointLocal, tunnelID),
-			fmt.Sprintf("wg set %s listen-port %d private-key <(echo %s) peer %s allowed-ips %s,%s,%s",
-				tunnelID, tunnel.ListenPort, tunnel.ServerPrivateKey, tunnel.ClientPublicKey,
-				endpointRemote, delegatedPrefix1, delegatedPrefix2),
-			fmt.Sprintf("ip link set %s up", tunnelID),
-			fmt.Sprintf("ip -6 route add %s dev %s", delegatedPrefix1, tunnelID),
-			fmt.Sprintf("ip -6 route add %s dev %s", delegatedPrefix2, tunnelID),
-			fmt.Sprintf("ip -6 route add %s dev %s", delegatedPrefix3, tunnelID),
+			fmt.Sprintf("wg set %s peer %s allowed-ips %s", wgInterface, tunnel.ClientPublicKey, allowedIPs),
+			fmt.Sprintf("ip -6 route add %s dev %s", delegatedPrefix1, wgInterface),
+			fmt.Sprintf("ip -6 route add %s dev %s", delegatedPrefix2, wgInterface),
+			fmt.Sprintf("ip -6 route add %s dev %s", delegatedPrefix3, wgInterface),
 		}
+
+		// Client-side commands (for user to run)
+		clientInterface := tunnelID
 		commands.Client = []string{
-			fmt.Sprintf("ip link add dev %s type wireguard", tunnelID),
-			fmt.Sprintf("ip -6 addr add %s dev %s", endpointRemote, tunnelID),
-			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix1, "/64"), tunnelID),
-			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix2, "/64"), tunnelID),
-			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix3, "/64"), tunnelID),
-			fmt.Sprintf("wg set %s private-key <(echo %s) peer %s endpoint %s:%d allowed-ips ::/0",
-				tunnelID, tunnel.ClientPrivateKey, tunnel.ServerPublicKey, serverIPv4, tunnel.ListenPort),
-			fmt.Sprintf("ip link set %s up", tunnelID),
-			fmt.Sprintf("ip -6 route add ::/0 dev %s", tunnelID),
+			fmt.Sprintf("ip link add dev %s type wireguard", clientInterface),
+			fmt.Sprintf("ip -6 addr add %s dev %s", endpointRemote, clientInterface),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix1, "/64"), clientInterface),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix2, "/64"), clientInterface),
+			fmt.Sprintf("ip -6 addr add %s1/64 dev %s", strings.TrimSuffix(delegatedPrefix3, "/64"), clientInterface),
+			fmt.Sprintf("echo '%s' > /etc/wireguard/%s_private.key && chmod 600 /etc/wireguard/%s_private.key",
+				tunnel.ClientPrivateKey, clientInterface, clientInterface),
+			fmt.Sprintf("wg set %s private-key /etc/wireguard/%s_private.key peer %s endpoint %s:%d allowed-ips ::/0",
+				clientInterface, clientInterface, serverPubKey, serverIPv4, wgPort),
+			fmt.Sprintf("ip link set %s up", clientInterface),
+			fmt.Sprintf("ip -6 route add ::/0 dev %s", clientInterface),
 		}
 	} else {
 		return nil, nil, errors.New("invalid tunnel type")

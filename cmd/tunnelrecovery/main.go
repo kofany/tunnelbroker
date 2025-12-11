@@ -88,13 +88,19 @@ func main() {
 
 	logger.Printf("TunnelRecovery: Found %d tunnels in database", len(tunnels))
 
-	// Get existing tunnels in system
+	// Get existing SIT/GRE tunnels in system
 	existingTunnels, err := getExistingTunnels()
 	if err != nil {
 		logger.Fatalf("Failed to get existing tunnels: %v", err)
 	}
+	logger.Printf("TunnelRecovery: Found %d SIT/GRE tunnels in system", len(existingTunnels))
 
-	logger.Printf("TunnelRecovery: Found %d tunnels in system", len(existingTunnels))
+	// Get existing WireGuard peers
+	existingWGPeers, err := getExistingWireGuardPeers()
+	if err != nil {
+		logger.Printf("Warning: Failed to get WireGuard peers: %v", err)
+	}
+	logger.Printf("TunnelRecovery: Found %d WireGuard peers in system", len(existingWGPeers))
 
 	// Recreate missing tunnels
 	recreatedCount := 0
@@ -104,13 +110,35 @@ func main() {
 			continue
 		}
 
-		if !contains(existingTunnels, tunnel.ID) {
-			logger.Printf("TunnelRecovery: Recreating missing tunnel %s", tunnel.ID)
+		needsRecreation := false
+		if strings.ToLower(tunnel.Type) == "wg" {
+			// For WireGuard, check if peer exists by ClientPublicKey
+			if !contains(existingWGPeers, tunnel.ClientPublicKey) {
+				needsRecreation = true
+			}
+		} else {
+			// For SIT/GRE, check if interface exists by tunnel ID
+			if !contains(existingTunnels, tunnel.ID) {
+				needsRecreation = true
+			}
+		}
+
+		if needsRecreation {
+			logger.Printf("TunnelRecovery: Recreating missing tunnel %s (type: %s)", tunnel.ID, tunnel.Type)
 			if err := recreateTunnel(tunnel); err != nil {
 				logger.Printf("TunnelRecovery: Failed to recreate tunnel %s: %v", tunnel.ID, err)
 			} else {
 				recreatedCount++
 			}
+		}
+	}
+
+	// Apply security rules ONCE at the end (not per-tunnel)
+	if recreatedCount > 0 {
+		logger.Println("TunnelRecovery: Applying security rules...")
+		securityCmd := exec.Command("/etc/tunnelbroker/scripts/tunnel_security.sh")
+		if err := securityCmd.Run(); err != nil {
+			logger.Printf("TunnelRecovery: Warning: Failed to apply security rules: %v", err)
 		}
 	}
 
@@ -189,34 +217,40 @@ func getExistingTunnels() ([]string, error) {
 		}
 	}
 
-	// Get WireGuard tunnels
-	wgCmd := exec.Command("ip", "link", "show", "type", "wireguard")
-	var wgOut bytes.Buffer
-	wgCmd.Stdout = &wgOut
-	if err := wgCmd.Run(); err != nil {
-		// WireGuard might not be available or no interfaces exist
-		logger.Printf("Info: No WireGuard interfaces found or WireGuard not available")
-	} else {
-		lines := strings.Split(wgOut.String(), "\n")
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			// WireGuard interfaces appear as: "N: interfacename: <POINTOPOINT,NOARP,UP,LOWER_UP> ..."
-			if strings.Contains(line, ":") && !strings.HasPrefix(strings.TrimSpace(line), "link/") {
-				parts := strings.Split(line, ":")
-				if len(parts) >= 2 {
-					// Extract interface name (between first number and second colon)
-					interfaceName := strings.TrimSpace(parts[1])
-					if interfaceName != "" && strings.HasPrefix(interfaceName, "tun-") {
-						tunnels = append(tunnels, interfaceName)
-					}
-				}
-			}
+	// Note: WireGuard tunnels are handled separately via getExistingWireGuardPeers()
+	// because they use a shared wg0 interface with multiple peers
+
+	return tunnels, nil
+}
+
+// getExistingWireGuardPeers gets a list of existing WireGuard peer public keys
+func getExistingWireGuardPeers() ([]string, error) {
+	var peers []string
+
+	wgInterface := config.GlobalConfig.WireGuard.Interface
+	if wgInterface == "" {
+		wgInterface = "wg0"
+	}
+
+	// Get peers from wg0 using 'wg show wg0 peers'
+	cmd := exec.Command("wg", "show", wgInterface, "peers")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		// wg0 might not exist yet
+		logger.Printf("Info: No WireGuard peers found or wg0 not available: %v", err)
+		return peers, nil
+	}
+
+	lines := strings.Split(out.String(), "\n")
+	for _, line := range lines {
+		peer := strings.TrimSpace(line)
+		if peer != "" {
+			peers = append(peers, peer)
 		}
 	}
 
-	return tunnels, nil
+	return peers, nil
 }
 
 // recreateTunnel recreates a tunnel in the system
@@ -251,46 +285,45 @@ func recreateTunnel(tunnel Tunnel) error {
 		}
 
 	case "wg":
-		// WireGuard configuration
+		// WireGuard configuration - add peer to shared wg0 interface
+		wgInterface := config.GlobalConfig.WireGuard.Interface
+		if wgInterface == "" {
+			wgInterface = "wg0"
+		}
+
+		// Build allowed-ips list including all prefixes
+		allowedIPs := fmt.Sprintf("%s,%s,%s", tunnel.EndpointRemote, tunnel.DelegatedPrefix1, tunnel.DelegatedPrefix2)
+		if tunnel.DelegatedPrefix3 != "" {
+			allowedIPs = fmt.Sprintf("%s,%s", allowedIPs, tunnel.DelegatedPrefix3)
+		}
+
+		// Add peer to wg0 and routes (same as service.go)
 		commands = []string{
-			fmt.Sprintf("ip link add dev %s type wireguard", tunnel.ID),
-			fmt.Sprintf("ip -6 addr add %s dev %s", tunnel.EndpointLocal, tunnel.ID),
-			fmt.Sprintf("wg set %s listen-port %d private-key <(echo %s) peer %s allowed-ips %s,%s,%s",
-				tunnel.ID, tunnel.ListenPort, tunnel.ServerPrivateKey, tunnel.ClientPublicKey,
-				tunnel.EndpointRemote, tunnel.DelegatedPrefix1, tunnel.DelegatedPrefix2),
-			fmt.Sprintf("ip link set %s up", tunnel.ID),
-			fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix1, tunnel.ID),
-			fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix2, tunnel.ID),
+			fmt.Sprintf("wg set %s peer %s allowed-ips %s", wgInterface, tunnel.ClientPublicKey, allowedIPs),
+			fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix1, wgInterface),
+			fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix2, wgInterface),
 		}
 		// Add third prefix route if it exists
 		if tunnel.DelegatedPrefix3 != "" {
-			commands = append(commands, fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix3, tunnel.ID))
+			commands = append(commands, fmt.Sprintf("ip -6 route add %s dev %s", tunnel.DelegatedPrefix3, wgInterface))
 		}
 
 	default:
 		return fmt.Errorf("invalid tunnel type: %s", tunnel.Type)
 	}
 
-	// Execute commands using sh -c for WireGuard (needed for process substitution)
+	// Execute commands
 	for _, cmd := range commands {
-		var command *exec.Cmd
-		if strings.ToLower(tunnel.Type) == "wg" && strings.Contains(cmd, "<(echo") {
-			// WireGuard commands with process substitution need to be executed via bash
-			command = exec.Command("bash", "-c", cmd)
-		} else {
-			parts := strings.Split(cmd, " ")
-			command = exec.Command(parts[0], parts[1:]...)
+		parts := strings.Split(cmd, " ")
+		command := exec.Command(parts[0], parts[1:]...)
+		if output, err := command.CombinedOutput(); err != nil {
+			// Log but continue for route errors (route might already exist)
+			if strings.Contains(cmd, "ip -6 route add") && strings.Contains(string(output), "File exists") {
+				logger.Printf("TunnelRecovery: Route already exists, skipping: %s", cmd)
+				continue
+			}
+			return fmt.Errorf("error executing command '%s': %w (output: %s)", cmd, err, string(output))
 		}
-		if err := command.Run(); err != nil {
-			return fmt.Errorf("error executing command '%s': %w", cmd, err)
-		}
-	}
-
-	// Apply security rules
-	securityCmd := exec.Command("/etc/tunnelbroker/scripts/tunnel_security.sh")
-	if err := securityCmd.Run(); err != nil {
-		logger.Printf("TunnelRecovery: Warning: Failed to apply security rules: %v", err)
-		// Continue even if security script fails
 	}
 
 	return nil
