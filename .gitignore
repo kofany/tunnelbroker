@@ -153,3 +153,4 @@ go.work.sum
 
 # Documentation with sensitive data
 docs/api.md
+updated_config.yaml
